@@ -1,0 +1,19 @@
+# Python / Virtual Environment
+venv/
+.venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Outputs & Test Dumps
+output_*.mp4
+inspect_frames/
+*.csv
+
+# OS files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
