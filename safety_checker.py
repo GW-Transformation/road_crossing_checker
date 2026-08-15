@@ -26,7 +26,9 @@ class RoadCrossingSafetyChecker:
         poi_config_path="poi_config.json",
         db_path="data/crossing_records.db",
         face_api_url=None,
-        enable_alarm=True
+        enable_alarm=True,
+        max_crossing_wait_sec=5.0,
+        **kwargs
     ):
         base_dir = os.path.dirname(os.path.abspath(__file__))
         if model_path is None:
@@ -43,6 +45,7 @@ class RoadCrossingSafetyChecker:
         )
         self.detector = vision.PoseLandmarker.create_from_options(options)
         self.min_hold_frames = min_hold_frames
+        self.max_crossing_wait_sec = max_crossing_wait_sec
         
         # Subsystems
         self.poi_manager = POIManager(config_path=os.path.join(base_dir, poi_config_path))

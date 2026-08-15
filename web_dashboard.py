@@ -59,7 +59,7 @@ def mock_face_recognition():
         "confidence": 0.94
     })
 
-def start_web_server(port=5000):
+def start_web_server(port=8080):
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 
 if __name__ == "__main__":

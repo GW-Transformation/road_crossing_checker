@@ -78,7 +78,13 @@ def parse_arguments():
     parser.add_argument(
         "--web",
         action="store_true",
-        help="Start background Web Incident Dashboard at http://localhost:5000"
+        help="Start background Web Incident Dashboard (default: http://localhost:8080)"
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8080,
+        help="Port for Web Incident Dashboard (default: 8080)"
     )
     parser.add_argument(
         "--headless",
@@ -92,19 +98,24 @@ def parse_arguments():
     )
     return parser.parse_args()
 
-def run_web_dashboard_async():
+def run_web_dashboard_async(port=8080):
     def _run():
-        flask_app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)
+        for p in [port, 8080, 8081, 5001, 5000]:
+            try:
+                print(f"[*] Starting Web Incident Dashboard at: http://localhost:{p}")
+                flask_app.run(host="0.0.0.0", port=p, debug=False, use_reloader=False)
+                break
+            except Exception:
+                continue
     t = threading.Thread(target=_run, daemon=True)
     t.start()
-    print("[*] Web Incident Dashboard started at: http://localhost:5000")
 
 def main():
     args = parse_arguments()
     
     # Start web dashboard if requested
     if args.web:
-        run_web_dashboard_async()
+        run_web_dashboard_async(port=args.port)
 
     # Determine video source
     source_val = args.source
