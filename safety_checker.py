@@ -16,10 +16,10 @@ class RoadCrossingSafetyChecker:
     """
     High-Performance & Resource-Optimized Road Crossing Safety Checker
     ==================================================================
-    - Optimized 360p/480p inference downscaling for embedded & low-spec hardware
-    - Strict Qualified Pedestrian verification (prevents false alarms on empty frames)
+    - Live Skeleton Overlay with glowing joints & dynamic step color coding
+    - Full HUD & Status embedded in Evidence Video Recordings
+    - Active People Screen Panel (Face Avatar + Step 1, 2, 3 Status)
     - Alarms ONLY when a confirmed pedestrian leaves POI without completing 3 steps (1 time only)
-    - Multi-person 1-to-1 matching with zero step cross-talk
     """
     def __init__(
         self,
@@ -147,7 +147,7 @@ class RoadCrossingSafetyChecker:
             
         h, w, _ = frame.shape
         
-        # Performance Optimization: Downscale frame for MediaPipe inference
+        # Inference downscaling for low CPU usage
         if w > self.inference_max_width:
             scale = self.inference_max_width / float(w)
             inf_w = self.inference_max_width
@@ -169,7 +169,6 @@ class RoadCrossingSafetyChecker:
                 ys = [p.y for p in lm]
                 bw = max(xs) - min(xs)
                 bh = max(ys) - min(ys)
-                # Filter out noisy, tiny, or incomplete detections
                 if bh < 0.15 or bw < 0.06:
                     continue
                 bbox = (max(0.0, min(xs)), max(0.0, min(ys)), min(1.0, max(xs)), min(1.0, max(ys)))
@@ -206,16 +205,14 @@ class RoadCrossingSafetyChecker:
                 matched_pose.add(pose_idx)
                 assigned_poses[tracked_persons[p_idx].track_id] = detected_poses[pose_idx][0]
 
-        # Process each tracked person independently
+        # 1. Update Step States for each person
         for person in tracked_persons:
             matched_lm = assigned_poses.get(person.track_id)
             if matched_lm:
-                # Snap face image
                 face_crop, face_coords = self._extract_face_crop(frame, matched_lm)
                 if face_crop is not None:
                     person.update_face(face_crop, score=1.0)
                     
-                # Classify 3-step safety standard
                 head_look, head_yaw = self._classify_head_look(
                     matched_lm[0], matched_lm[7], matched_lm[8], matched_lm[2], matched_lm[5]
                 )
@@ -252,7 +249,7 @@ class RoadCrossingSafetyChecker:
                             person.step3_time = timestamp_sec
                             person.total_ok = True
                             person.is_ng = False
-                            self.alarm.play_step_ok(step_num=3) # Level-Up Victory Sound!
+                            self.alarm.play_step_ok(step_num=3) # Level-Up sound!
                     else:
                         person.step3_hold_count = max(0, person.step3_hold_count - 1)
 
@@ -260,25 +257,40 @@ class RoadCrossingSafetyChecker:
             in_poi = self.poi_manager.is_bbox_inside_or_intersect(person.bbox_norm)
             person.set_poi_state(in_poi)
 
-            if person.active_monitor:
-                person.add_evidence_frame(frame)
-
-            # If person stepped out of POI while still in frame:
             if person.exited_poi and person.is_qualified_pedestrian and not person.judged:
                 self._judge_person_outcome(person, timestamp_sec)
 
-        # Process any persons that disappeared/left the camera frame
         for person in self.tracker.recently_removed_persons:
             if person.is_qualified_pedestrian and not person.judged:
                 self._judge_person_outcome(person, timestamp_sec)
 
-        # Draw POI Overlay
+        # 2. Draw Live Skeleton Landmarks on Frame
+        for person in tracked_persons:
+            matched_lm = assigned_poses.get(person.track_id)
+            if matched_lm:
+                self._draw_person_skeleton(
+                    frame, matched_lm, w, h,
+                    total_ok=person.total_ok,
+                    is_ng=person.is_ng,
+                    step1_ok=person.step1_ok,
+                    step2_ok=person.step2_ok,
+                    step3_ok=person.step3_ok,
+                    track_id=person.track_id,
+                    bbox_norm=person.bbox_norm
+                )
+
+        # 3. Draw POI Overlay
         poi_active = any(p.active_monitor for p in tracked_persons)
         frame = self.poi_manager.draw_poi_overlay(frame, active=poi_active)
         
-        # Draw Dedicated Active People Panel (Faces + Step 1, 2, 3 Status)
+        # 4. Draw Active People Panel (Face Avatar + S1, S2, S3)
         annotated_frame = self._draw_active_people_panel(frame, tracked_persons)
         
+        # 5. Store Annotated Frame (with full skeleton & status HUD) into Evidence Buffers
+        for person in tracked_persons:
+            if person.active_monitor:
+                person.add_evidence_frame(annotated_frame)
+
         info = {
             "timestamp": timestamp_sec,
             "tracked_count": len(tracked_persons),
@@ -296,12 +308,66 @@ class RoadCrossingSafetyChecker:
         }
         return annotated_frame, info
 
+    def _draw_person_skeleton(self, frame, lm, w, h, total_ok, is_ng, step1_ok, step2_ok, step3_ok, track_id, bbox_norm):
+        """Draws glowing skeleton connections and floating status pill over pedestrian"""
+        if is_ng:
+            bone_color = (0, 0, 255) # Red
+            joint_color = (120, 120, 255)
+        elif total_ok:
+            bone_color = (0, 255, 120) # Vivid Green
+            joint_color = (255, 255, 255)
+        elif step2_ok:
+            bone_color = (0, 220, 255) # Cyan
+            joint_color = (255, 255, 255)
+        elif step1_ok:
+            bone_color = (0, 180, 255) # Orange
+            joint_color = (255, 255, 255)
+        else:
+            bone_color = (220, 220, 220) # Bright Silver
+            joint_color = (0, 200, 255)
+
+        connections = [
+            (11, 12), # shoulders
+            (11, 13), (13, 15), # left arm
+            (12, 14), (14, 16), # right arm
+            (11, 23), (12, 24), (23, 24), # torso
+            (0, 1), (1, 2), (2, 3), (3, 7), # face left
+            (0, 4), (4, 5), (5, 6), (6, 8), # face right
+            (15, 19), (16, 20), # hands/fingers
+            (23, 25), (24, 26), (25, 27), (26, 28) # legs
+        ]
+
+        # Draw bones
+        for p1, p2 in connections:
+            if p1 < len(lm) and p2 < len(lm):
+                pt1 = (int(lm[p1].x * w), int(lm[p1].y * h))
+                pt2 = (int(lm[p2].x * w), int(lm[p2].y * h))
+                cv2.line(frame, pt1, pt2, bone_color, 2, cv2.LINE_AA)
+
+        # Draw joints
+        for i in [0, 7, 8, 11, 12, 13, 14, 15, 16, 19, 20, 23, 24]:
+            if i < len(lm):
+                pt = (int(lm[i].x * w), int(lm[i].y * h))
+                cv2.circle(frame, pt, 4, joint_color, -1, cv2.LINE_AA)
+                cv2.circle(frame, pt, 2, (0, 0, 0), 1, cv2.LINE_AA)
+
+        # Floating Mini Status Tag above head
+        if 0 < len(lm):
+            head_x = int(lm[0].x * w)
+            head_y = max(24, int(lm[0].y * h) - 24)
+            
+            s1_txt = "S1:OK" if step1_ok else "S1:--"
+            s2_txt = "S2:OK" if step2_ok else "S2:--"
+            s3_txt = "S3:OK" if step3_ok else "S3:--"
+            tag_str = f"#{track_id} [{s1_txt} {s2_txt} {s3_txt}]"
+            
+            # Tag background
+            (tw, th), _ = cv2.getTextSize(tag_str, cv2.FONT_HERSHEY_SIMPLEX, 0.38, 1)
+            cv2.rectangle(frame, (head_x - tw//2 - 4, head_y - th - 4), (head_x + tw//2 + 4, head_y + 4), (20, 20, 26), -1)
+            cv2.rectangle(frame, (head_x - tw//2 - 4, head_y - th - 4), (head_x + tw//2 + 4, head_y + 4), bone_color, 1)
+            cv2.putText(frame, tag_str, (head_x - tw//2, head_y), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (255, 255, 255), 1, cv2.LINE_AA)
+
     def _judge_person_outcome(self, person, timestamp_sec):
-        """
-        Judges a qualified person once upon disappearing or leaving POI:
-        - If total_ok == True ➔ TOTAL OK (Logged to DB, 0 voice alarms)
-        - If total_ok == False ➔ NG (Voice alarm plays EXACTLY 1 TIME, logged to DB, Face API called)
-        """
         person.judged = True
         
         if person.total_ok:
@@ -325,10 +391,8 @@ class RoadCrossingSafetyChecker:
             print(f"\n[JUDGMENT: TOTAL OK] Person #{person.track_id} crossed with complete standard! Logged to DB (ID: {record_id})")
         else:
             person.is_ng = True
-            
-            # Voice Alarm: EXACTLY 1 TIME
             if not person.alarm_triggered:
-                self.alarm.play_alarm(reason="Disappeared without completing safety steps")
+                self.alarm.play_alarm(reason="Left POI without completing 3 safety steps")
                 person.alarm_triggered = True
                 
             face_path = person.save_face_image()
@@ -361,7 +425,6 @@ class RoadCrossingSafetyChecker:
         panel_x = w - panel_w - 10
         panel_y = 10
         
-        # Only display confirmed pedestrians in the panel
         active_list = [p for p in tracked_persons if p.is_qualified_pedestrian or p.frames_in_poi >= 5]
         if not active_list:
             overlay = frame.copy()
