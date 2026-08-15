@@ -3,102 +3,110 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Road Crossing Safety Monitor & Incident Dashboard</title>
+  <title>Road Crossing Safety Monitor & Evidence Hub</title>
   <style>
     :root {
-      --bg: #0f1117;
-      --card-bg: #181b24;
-      --border: #282d3d;
-      --text: #f0f3f8;
-      --text-muted: #8b949e;
-      --accent: #388bfd;
-      --success: #238636;
-      --danger: #da3633;
-      --warning: #d29922;
+      --bg: #0d1117;
+      --card: #161b22;
+      --border: #30363d;
+      --text: #f0f6fc;
+      --muted: #8b949e;
+      --accent: #58a6ff;
+      --success: #3fb950;
+      --danger: #f85149;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-    body { background-color: var(--bg); color: var(--text); padding: 24px; line-height: 1.5; }
-    .container { max-width: 1200px; margin: 0 auto; }
+    body { background: var(--bg); color: var(--text); padding: 24px; }
+    .container { max-width: 1280px; margin: 0 auto; }
     
-    header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
-    h1 { font-size: 22px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+    header { display: flex; justify-content: space-between; align-items: center; padding-bottom: 20px; border-bottom: 1px solid var(--border); margin-bottom: 24px; }
+    h1 { font-size: 24px; font-weight: 700; display: flex; align-items: center; gap: 10px; }
     .badge { padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; }
-    .badge-live { background: rgba(35, 134, 54, 0.2); color: #3fb950; border: 1px solid #238636; }
-    .badge-ok { background: rgba(35, 134, 54, 0.2); color: #3fb950; }
-    .badge-ng { background: rgba(218, 54, 51, 0.2); color: #f85149; }
+    .badge-live { background: rgba(63, 185, 80, 0.15); color: var(--success); border: 1px solid var(--success); }
+    .badge-ok { background: rgba(63, 185, 80, 0.2); color: var(--success); }
+    .badge-ng { background: rgba(248, 81, 73, 0.2); color: var(--danger); }
     
-    .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-bottom: 24px; }
-    .stat-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 18px; }
-    .stat-title { font-size: 13px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
-    .stat-value { font-size: 28px; font-weight: 700; margin-top: 8px; }
+    .stats-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-bottom: 24px; }
+    .stat-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 18px; }
+    .stat-label { font-size: 12px; color: var(--muted); text-transform: uppercase; font-weight: 600; }
+    .stat-num { font-size: 32px; font-weight: 700; margin-top: 6px; }
     
-    .main-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 24px; }
-    @media (max-width: 900px) { .main-grid { grid-template-columns: 1fr; } }
+    .layout { display: grid; grid-template-columns: 2.2fr 1fr; gap: 24px; }
+    @media (max-width: 960px) { .layout { grid-template-columns: 1fr; } }
     
-    .card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin-bottom: 24px; }
-    .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; font-size: 16px; font-weight: 600; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin-bottom: 24px; }
+    .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+    .card-title { font-size: 16px; font-weight: 600; }
     
-    table { width: 100%; border-collapse: collapse; font-size: 14px; }
-    th { text-align: left; padding: 10px; color: var(--text-muted); border-bottom: 1px solid var(--border); }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th { text-align: left; padding: 12px 10px; color: var(--muted); border-bottom: 1px solid var(--border); font-size: 12px; text-transform: uppercase; }
     td { padding: 12px 10px; border-bottom: 1px solid var(--border); vertical-align: middle; }
     
-    .face-thumb { width: 44px; height: 44px; border-radius: 6px; object-fit: cover; border: 1px solid var(--border); cursor: pointer; }
-    .face-thumb:hover { transform: scale(1.1); transition: transform 0.15s ease; }
+    .face-avatar { width: 48px; height: 48px; border-radius: 6px; object-fit: cover; border: 1px solid var(--border); cursor: pointer; transition: transform 0.2s; }
+    .face-avatar:hover { transform: scale(1.15); border-color: var(--accent); }
     
-    .btn { padding: 6px 12px; border-radius: 6px; border: none; font-size: 13px; font-weight: 500; cursor: pointer; background: var(--accent); color: white; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; }
-    .btn-secondary { background: #21262d; border: 1px solid var(--border); color: var(--text); }
-    .btn-secondary:hover { background: #30363d; }
+    .step-badge { display: inline-block; padding: 3px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; margin-right: 4px; }
+    .step-ok { background: #238636; color: #fff; }
+    .step-ng { background: #da3633; color: #fff; }
     
-    .poi-canvas { width: 100%; height: 220px; background: #000; border-radius: 6px; position: relative; border: 1px dashed var(--accent); }
-    .step-pills { display: flex; gap: 6px; font-size: 11px; }
-    .step-pill { padding: 2px 6px; border-radius: 4px; font-weight: 600; }
-    .pill-ok { background: #238636; color: white; }
-    .pill-ng { background: #da3633; color: white; }
+    .btn { padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 500; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); background: #21262d; color: var(--text); transition: background 0.15s; }
+    .btn:hover { background: #30363d; }
+    .btn-play { background: #1f6feb; border-color: #388bfd; color: white; }
+    .btn-play:hover { background: #388bfd; }
+    
+    /* Video Modal */
+    .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 1000; align-items: center; justify-content: center; }
+    .modal.active { display: flex; }
+    .modal-content { background: var(--card); border: 1px solid var(--border); border-radius: 8px; width: 90%; max-width: 680px; padding: 20px; position: relative; }
+    .modal-close { position: absolute; top: 12px; right: 14px; font-size: 20px; cursor: pointer; color: var(--muted); border: none; background: none; }
+    .modal-close:hover { color: var(--text); }
+    video { width: 100%; border-radius: 6px; margin-top: 12px; background: #000; }
   </style>
 </head>
 <body>
   <div class="container">
     <header>
-      <h1>🚸 Road Crossing Safety Monitor</h1>
-      <div>
-        <span class="badge badge-live">● SYSTEM ACTIVE</span>
+      <h1>🚸 Road Crossing Safety Monitor & Evidence Hub</h1>
+      <div style="display: flex; gap: 10px; align-items: center;">
+        <span class="badge badge-live">● ACTIVE MONITOR</span>
       </div>
     </header>
 
-    <div class="stats-grid">
+    <div class="stats-row">
       <div class="stat-card">
-        <div class="stat-title">Total Monitored</div>
-        <div class="stat-value" id="stat-total">{{ stats.total_events }}</div>
+        <div class="stat-label">Total Evaluated</div>
+        <div class="stat-num">{{ stats.total_events }}</div>
       </div>
       <div class="stat-card">
-        <div class="stat-title">Total Standard OK</div>
-        <div class="stat-value" style="color: #3fb950;" id="stat-ok">{{ stats.total_ok }}</div>
+        <div class="stat-label">Standard OK (Safe)</div>
+        <div class="stat-num" style="color: var(--success);">{{ stats.total_ok }}</div>
       </div>
       <div class="stat-card">
-        <div class="stat-title">Safety Violations (NG)</div>
-        <div class="stat-value" style="color: #f85149;" id="stat-ng">{{ stats.total_ng }}</div>
+        <div class="stat-label">Safety Violations (NG)</div>
+        <div class="stat-num" style="color: var(--danger);">{{ stats.total_ng }}</div>
       </div>
       <div class="stat-card">
-        <div class="stat-title">Standard Compliance</div>
-        <div class="stat-value" style="color: #58a6ff;">{{ "%.1f"|format(stats.compliance_rate) }}%</div>
+        <div class="stat-label">Compliance Rate</div>
+        <div class="stat-num" style="color: var(--accent);">{{ "%.1f"|format(stats.compliance_rate) }}%</div>
       </div>
     </div>
 
-    <div class="main-grid">
+    <div class="layout">
+      <!-- Incidents & History Table -->
       <div>
         <div class="card">
           <div class="card-header">
-            <span>🚨 Incident & Safety Log</span>
-            <button class="btn btn-secondary" onclick="location.reload()">🔄 Refresh</button>
+            <span class="card-title">📋 Pedestrian Crossing History & Evidence</span>
+            <button class="btn" onclick="location.reload()">🔄 Refresh</button>
           </div>
           <table>
             <thead>
               <tr>
                 <th>Face</th>
-                <th>Track / ID</th>
-                <th>Status</th>
-                <th>3 Steps (L / R / F)</th>
-                <th>Identified Person</th>
+                <th>Track / UUID</th>
+                <th>Outcome</th>
+                <th>Safety Steps</th>
+                <th>Matched Person</th>
                 <th>Time</th>
                 <th>Evidence</th>
               </tr>
@@ -108,43 +116,47 @@
               <tr>
                 <td>
                   {% if rec.face_image_path %}
-                  <img src="/{{ rec.face_image_path }}" class="face-thumb" alt="Face" onclick="window.open('/{{ rec.face_image_path }}')">
+                  <img src="/{{ rec.face_image_path }}" class="face-avatar" alt="Face" onclick="openMediaModal('image', '/{{ rec.face_image_path }}', 'Person #{{ rec.track_id }}')">
                   {% else %}
-                  <div style="width: 44px; height: 44px; background: #21262d; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 10px; color: #8b949e;">NO PIC</div>
+                  <div style="width: 48px; height: 48px; background: #21262d; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 10px; color: var(--muted);">NO PIC</div>
                   {% endif %}
                 </td>
-                <td><strong>#{{ rec.track_id }}</strong><br><small style="color: #8b949e;">{{ rec.event_uuid }}</small></td>
+                <td>
+                  <strong>Person #{{ rec.track_id }}</strong><br>
+                  <small style="color: var(--muted);">{{ rec.event_uuid }}</small>
+                </td>
                 <td>
                   <span class="badge {{ 'badge-ok' if rec.status == 'TOTAL_OK' else 'badge-ng' }}">
                     {{ rec.status }}
                   </span>
                 </td>
                 <td>
-                  <div class="step-pills">
-                    <span class="step-pill {{ 'pill-ok' if rec.step1_status == 'OK' else 'pill-ng' }}">L: {{ rec.step1_status }}</span>
-                    <span class="step-pill {{ 'pill-ok' if rec.step2_status == 'OK' else 'pill-ng' }}">R: {{ rec.step2_status }}</span>
-                    <span class="step-pill {{ 'pill-ok' if rec.step3_status == 'OK' else 'pill-ng' }}">F: {{ rec.step3_status }}</span>
-                  </div>
+                  <span class="step-badge {{ 'step-ok' if rec.step1_status == 'OK' else 'step-ng' }}">1: {{ rec.step1_status }}</span>
+                  <span class="step-badge {{ 'step-ok' if rec.step2_status == 'OK' else 'step-ng' }}">2: {{ rec.step2_status }}</span>
+                  <span class="step-badge {{ 'step-ok' if rec.step3_status == 'OK' else 'step-ng' }}">3: {{ rec.step3_status }}</span>
                 </td>
                 <td>
                   {% if rec.external_name %}
-                  <strong>{{ rec.external_name }}</strong><br><small style="color: #8b949e;">{{ rec.external_person_id }}</small>
+                  <strong>{{ rec.external_name }}</strong><br>
+                  <small style="color: var(--muted);">{{ rec.external_person_id }}</small>
                   {% else %}
-                  <span style="color: #8b949e;">Unmatched</span>
+                  <span style="color: var(--muted);">Unmatched</span>
                   {% endif %}
                 </td>
                 <td><small>{{ rec.timestamp }}</small></td>
                 <td>
                   {% if rec.evidence_video_path %}
-                  <a href="/{{ rec.evidence_video_path }}" target="_blank" class="btn btn-secondary" style="padding: 4px 8px; font-size: 11px;">▶ Video</a>
+                  <button class="btn btn-play" onclick="openMediaModal('video', '/{{ rec.evidence_video_path }}', 'Evidence Clip: Person #{{ rec.track_id }}')">
+                    ▶ Play Clip
+                  </button>
                   {% else %}
-                  <span style="color: #8b949e;">-</span>
+                  <span style="color: var(--muted);">-</span>
                   {% endif %}
                 </td>
               </tr>
               {% else %}
               <tr>
-                <td colspan="7" style="text-align: center; color: #8b949e; padding: 24px;">No crossing incidents recorded yet.</td>
+                <td colspan="7" style="text-align: center; color: var(--muted); padding: 32px;">No crossing incidents recorded yet.</td>
               </tr>
               {% endfor %}
             </tbody>
@@ -152,43 +164,76 @@
         </div>
       </div>
 
+      <!-- Right Column: Safety Rules & Alarm Info -->
       <div>
         <div class="card">
           <div class="card-header">
-            <span>🎯 Point of Interest (POI)</span>
+            <span class="card-title">🔊 Warning Alarm Protocol</span>
           </div>
-          <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 12px;">
-            Crossing Corridor Zone coordinates (normalized 0.0 - 1.0).
+          <p style="font-size: 13px; color: var(--muted); margin-bottom: 10px;">
+            Audio is played <strong>ONLY</strong> when a person who was in the POI leaves without completing all 3 safety steps:
           </p>
-          <div class="poi-canvas" id="poi-preview">
-            <svg width="100%" height="100%" viewBox="0 0 100 100" preserveAspectRatio="none">
-              <polygon id="poi-poly-svg" points="" fill="rgba(0, 200, 255, 0.2)" stroke="#00d2ff" stroke-width="1.5" />
-            </svg>
+          <div style="background: rgba(248,81,73,0.1); border-left: 3px solid var(--danger); padding: 12px; border-radius: 4px; margin-bottom: 12px;">
+            <p style="font-size: 14px; font-weight: 600; color: #ff7b72;">
+              "กรุณาหยุด ชี้นิ้วตามทางแยกให้ถูกต้อง"
+            </p>
           </div>
-          <div style="margin-top: 14px; font-size: 12px; color: #8b949e;">
-            <strong>Config:</strong> <span id="poi-json">{{ poi_poly|tojson }}</span>
-          </div>
+          <p style="font-size: 12px; color: var(--muted);">
+            Compliant pedestrians who finish Look+Point Left, Right, and Forward cross silently with <strong>TOTAL OK</strong>.
+          </p>
         </div>
 
         <div class="card">
           <div class="card-header">
-            <span>🔊 Voice Alarm Status</span>
+            <span class="card-title">🎯 Point of Interest (POI)</span>
           </div>
-          <p style="font-size: 13px; margin-bottom: 8px;"><strong>Voice Alert Text:</strong></p>
-          <blockquote style="background: #21262d; padding: 10px; border-radius: 6px; font-size: 13px; color: #e6edf3; border-left: 3px solid #f85149;">
-            "กรุณาหยุด ชี้นิ้วตามทางแยกให้ถูกต้อง"
-          </blockquote>
-          <p style="font-size: 12px; color: #8b949e; margin-top: 10px;">Plays automatically via high-decibel speaker output whenever any pedestrian in the POI commits a safety checklist violation.</p>
+          <div style="height: 180px; background: #000; border-radius: 6px; overflow: hidden; position: relative; border: 1px dashed var(--accent);">
+            <svg width="100%" height="100%" viewBox="0 0 100 100" preserveAspectRatio="none">
+              <polygon id="poi-svg" points="" fill="rgba(88, 166, 255, 0.2)" stroke="#58a6ff" stroke-width="1.5" />
+            </svg>
+          </div>
+          <p style="font-size: 12px; color: var(--muted); margin-top: 10px;">
+            Pedestrians are actively tracked once their bounding box enters this designated safety corridor.
+          </p>
         </div>
       </div>
     </div>
   </div>
 
+  <!-- Video / Image Modal -->
+  <div class="modal" id="media-modal" onclick="if(event.target === this) closeMediaModal()">
+    <div class="modal-content">
+      <button class="modal-close" onclick="closeMediaModal()">&times;</button>
+      <h3 id="modal-title" style="font-size: 16px; margin-bottom: 8px;">Evidence Viewer</h3>
+      <div id="modal-body"></div>
+    </div>
+  </div>
+
   <script>
-    const polyData = {{ poi_poly|tojson }};
-    if (polyData && polyData.length) {
-      const pts = polyData.map(p => `${p.x * 100},${p.y * 100}`).join(' ');
-      document.getElementById('poi-poly-svg').setAttribute('points', pts);
+    const poly = {{ poi_poly|tojson }};
+    if (poly && poly.length) {
+      const pts = poly.map(p => `${p.x * 100},${p.y * 100}`).join(' ');
+      document.getElementById('poi-svg').setAttribute('points', pts);
+    }
+
+    function openMediaModal(type, src, title) {
+      const modal = document.getElementById('media-modal');
+      const body = document.getElementById('modal-body');
+      document.getElementById('modal-title').innerText = title;
+      
+      if (type === 'video') {
+        body.innerHTML = `<video controls autoplay><source src="${src}" type="video/mp4">Your browser does not support video.</video>`;
+      } else {
+        body.innerHTML = `<img src="${src}" style="width: 100%; max-height: 450px; object-fit: contain; border-radius: 6px;" alt="Face Snap">`;
+      }
+      modal.classList.add('active');
+    }
+
+    function closeMediaModal() {
+      const modal = document.getElementById('media-modal');
+      const body = document.getElementById('modal-body');
+      body.innerHTML = '';
+      modal.classList.remove('active');
     }
   </script>
 </body>

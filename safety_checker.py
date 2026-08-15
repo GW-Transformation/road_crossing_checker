@@ -14,20 +14,10 @@ from face_recognition_client import ExternalFaceRecognitionClient
 
 class RoadCrossingSafetyChecker:
     """
-    Advanced Pedestrian Road Crossing Standard Safety Checker
-    =========================================================
-    Features:
-      - Point of Interest (POI) safety corridor detection
-      - Active Monitoring when person/face is detected in POI
-      - Individual pedestrian tracking & history
-      - 3-Step Safety Verification:
-          Step 1: Look Left AND Point Left
-          Step 2: Look Right AND Point Right
-          Step 3: Look Forward AND Point Forward
-      - Automatic NG detection with Voice Alarm: "กรุณาหยุด ชี้นิ้วตามทางแยกให้ถูกต้อง"
-      - Snaps best face crop & saves evidence video
-      - Dispatches External Face Recognition API to identify person
-      - Full DB logging to SQLite
+    Pedestrian Road Crossing Standard Safety Checker
+    ================================================
+    Active People Panel (Face Avatar + Step 1, 2, 3 Status)
+    Delayed NG Alarm: Alarms ONLY when person leaves POI without completing 3 steps.
     """
     def __init__(
         self,
@@ -36,8 +26,7 @@ class RoadCrossingSafetyChecker:
         poi_config_path="poi_config.json",
         db_path="data/crossing_records.db",
         face_api_url=None,
-        enable_alarm=True,
-        max_crossing_wait_sec=5.0
+        enable_alarm=True
     ):
         base_dir = os.path.dirname(os.path.abspath(__file__))
         if model_path is None:
@@ -54,7 +43,6 @@ class RoadCrossingSafetyChecker:
         )
         self.detector = vision.PoseLandmarker.create_from_options(options)
         self.min_hold_frames = min_hold_frames
-        self.max_crossing_wait_sec = max_crossing_wait_sec
         
         # Subsystems
         self.poi_manager = POIManager(config_path=os.path.join(base_dir, poi_config_path))
@@ -66,12 +54,10 @@ class RoadCrossingSafetyChecker:
             on_match_callback=self._on_face_matched
         )
         
-        # Global stats / active list
         self.active_tracked_persons = []
         self.last_ng_event = None
 
     def _on_face_matched(self, record_id, result):
-        """Callback when external face recognition server returns identification"""
         if result and result.get("matched"):
             self.db.update_external_recognition(
                 record_id=record_id,
@@ -127,7 +113,6 @@ class RoadCrossingSafetyChecker:
 
     def _extract_face_crop(self, frame, lm):
         h, w, _ = frame.shape
-        # Key head landmarks: nose(0), ears(7,8), eyes(2,5), mouth(9,10)
         xs = [lm[i].x for i in [0, 2, 5, 7, 8, 9, 10] if i < len(lm)]
         ys = [lm[i].y for i in [0, 2, 5, 7, 8, 9, 10] if i < len(lm)]
         if not xs or not ys:
@@ -136,9 +121,8 @@ class RoadCrossingSafetyChecker:
         min_x, max_x = max(0.0, min(xs)), min(1.0, max(xs))
         min_y, max_y = max(0.0, min(ys)), min(1.0, max(ys))
         
-        # Margin
-        pad_x = (max_x - min_x) * 0.45 + 0.02
-        pad_y = (max_y - min_y) * 0.45 + 0.02
+        pad_x = (max_x - min_x) * 0.40 + 0.02
+        pad_y = (max_y - min_y) * 0.40 + 0.02
         
         x1 = max(0, int((min_x - pad_x) * w))
         y1 = max(0, int((min_y - pad_y) * h))
@@ -166,19 +150,23 @@ class RoadCrossingSafetyChecker:
             for lm in detection_result.pose_landmarks:
                 xs = [p.x for p in lm]
                 ys = [p.y for p in lm]
+                bw = max(xs) - min(xs)
+                bh = max(ys) - min(ys)
+                # Ignore noisy / tiny detections
+                if bh < 0.12 or bw < 0.05:
+                    continue
                 bbox = (max(0.0, min(xs)), max(0.0, min(ys)), min(1.0, max(xs)), min(1.0, max(ys)))
                 detected_poses.append((lm, bbox))
                 detected_bboxes.append(bbox)
 
-        # Update Multi-Person Tracker
         tracked_persons = self.tracker.update(detected_bboxes, timestamp_sec)
         self.active_tracked_persons = tracked_persons
 
-        # Associate poses to tracked persons
+        # Process active tracked persons
         for person in tracked_persons:
             person.add_evidence_frame(frame)
             
-            # Find best matching pose
+            # Find matching pose
             matched_lm = None
             for lm, p_bbox in detected_poses:
                 p_cen = ((p_bbox[0]+p_bbox[2])/2.0, (p_bbox[1]+p_bbox[3])/2.0)
@@ -186,19 +174,17 @@ class RoadCrossingSafetyChecker:
                     matched_lm = lm
                     break
                     
-            # Check POI Containment
+            # Check POI containment
             in_poi = self.poi_manager.is_bbox_inside_or_intersect(person.bbox_norm)
-            person.in_poi = in_poi
-            if in_poi:
-                person.active_monitor = True
+            person.set_poi_state(in_poi)
 
             if matched_lm and person.active_monitor:
-                # Snap high quality face crop
+                # Snap face image
                 face_crop, face_coords = self._extract_face_crop(frame, matched_lm)
                 if face_crop is not None:
                     person.update_face(face_crop, score=1.0)
                     
-                # Classify Look & Point
+                # Classify 3-step safety standard
                 head_look, head_yaw = self._classify_head_look(
                     matched_lm[0], matched_lm[7], matched_lm[8], matched_lm[2], matched_lm[5]
                 )
@@ -236,27 +222,21 @@ class RoadCrossingSafetyChecker:
                     else:
                         person.step3_hold_count = max(0, person.step3_hold_count - 1)
                         
-                # Check for NG Condition:
-                # If person has been in POI crossing area for more than max_crossing_wait_sec
-                # or is moving across without completing the 3 steps -> Trigger NG!
-                time_in_poi = timestamp_sec - person.entry_time
-                if not person.total_ok and time_in_poi >= self.max_crossing_wait_sec:
-                    person.is_ng = True
-                    self._trigger_ng_actions(person, timestamp_sec)
+                # If person stepped out of POI while still in frame:
+                if person.exited_poi and person.frames_in_poi >= 5 and not person.judged:
+                    self._judge_person_outcome(person, timestamp_sec)
 
-                # If person finished all 3 steps successfully -> Trigger TOTAL_OK Log
-                elif person.total_ok and not person.db_logged:
-                    self._trigger_total_ok_actions(person, timestamp_sec)
-
-                # Draw skeleton on person
-                self._draw_person_skeleton(frame, matched_lm, w, h, person.total_ok, person.is_ng)
+        # Process any persons that disappeared/left the camera frame
+        for person in self.tracker.recently_removed_persons:
+            if person.entered_poi_once and person.frames_in_poi >= 5 and not person.judged:
+                self._judge_person_outcome(person, timestamp_sec)
 
         # Draw POI Overlay
         poi_active = any(p.active_monitor for p in tracked_persons)
         frame = self.poi_manager.draw_poi_overlay(frame, active=poi_active)
         
-        # Draw Comprehensive Multi-Person HUD Overlay
-        annotated_frame = self._draw_multi_hud(frame, tracked_persons)
+        # Draw Dedicated Active People Panel (Faces + Step 1, 2, 3 Status)
+        annotated_frame = self._draw_active_people_panel(frame, tracked_persons)
         
         info = {
             "timestamp": timestamp_sec,
@@ -275,139 +255,182 @@ class RoadCrossingSafetyChecker:
         }
         return annotated_frame, info
 
-    def _trigger_ng_actions(self, person, timestamp_sec):
-        if person.db_logged:
-            return
-            
-        # 1. Voice Alarm Warning
-        if not person.alarm_triggered:
-            self.alarm.play_alarm(reason="Safety Checklist Incomplete")
-            person.alarm_triggered = True
-            
-        # 2. Save Evidence Video & Cropped Face
-        face_path = person.save_face_image()
-        evidence_path = person.save_evidence_video()
+    def _judge_person_outcome(self, person, timestamp_sec):
+        """
+        Judge outcome when person leaves POI or exits view:
+        - If total_ok == True ➔ TOTAL OK (Logged to DB)
+        - If total_ok == False ➔ NG (Voice alarm plays, logged to DB, Face recognition queried)
+        """
+        person.judged = True
         
-        # 3. Log to SQLite Database
-        record_data = {
-            "event_uuid": person.event_uuid,
-            "track_id": person.track_id,
-            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp_sec)),
-            "status": "NG",
-            "step1_status": "OK" if person.step1_ok else "NG",
-            "step2_status": "OK" if person.step2_ok else "NG",
-            "step3_status": "OK" if person.step3_ok else "NG",
-            "duration_sec": timestamp_sec - person.entry_time,
-            "face_image_path": face_path,
-            "evidence_video_path": evidence_path,
-            "metadata": {"in_poi": person.in_poi, "trajectory_len": len(person.trajectory)}
-        }
-        record_id = self.db.insert_record(record_data)
-        person.db_logged = True
-        self.last_ng_event = record_data
-        print(f"\n[ALERT NG] Person #{person.track_id} failed standard! Logged to DB (ID: {record_id})")
-
-        # 4. Dispatch Async External Face Recognition API
-        if person.best_face_image is not None:
-            self.face_client.recognize_face_async(person.best_face_image, record_id, metadata=record_data)
-
-    def _trigger_total_ok_actions(self, person, timestamp_sec):
-        if person.db_logged:
-            return
-        face_path = person.save_face_image()
-        evidence_path = person.save_evidence_video()
-        record_data = {
-            "event_uuid": person.event_uuid,
-            "track_id": person.track_id,
-            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp_sec)),
-            "status": "TOTAL_OK",
-            "step1_status": "OK",
-            "step2_status": "OK",
-            "step3_status": "OK",
-            "duration_sec": timestamp_sec - person.entry_time,
-            "face_image_path": face_path,
-            "evidence_video_path": evidence_path,
-            "metadata": {"in_poi": person.in_poi}
-        }
-        record_id = self.db.insert_record(record_data)
-        person.db_logged = True
-        print(f"\n[TOTAL OK] Person #{person.track_id} completed standard! Logged to DB (ID: {record_id})")
-
-    def _draw_person_skeleton(self, frame, lm, w, h, total_ok, is_ng):
-        connections = [
-            (11, 12), (11, 13), (13, 15), (12, 14), (14, 16),
-            (11, 23), (12, 24), (23, 24),
-            (0, 1), (1, 2), (2, 3), (3, 7), (0, 4), (4, 5), (5, 6), (6, 8),
-            (15, 19), (16, 20)
-        ]
-        color = (0, 0, 255) if is_ng else ((0, 255, 0) if total_ok else (0, 220, 255))
-        for p1, p2 in connections:
-            if p1 < len(lm) and p2 < len(lm):
-                pt1 = (int(lm[p1].x * w), int(lm[p1].y * h))
-                pt2 = (int(lm[p2].x * w), int(lm[p2].y * h))
-                cv2.line(frame, pt1, pt2, color, 2, cv2.LINE_AA)
-
-    def _draw_multi_hud(self, frame, tracked_persons):
-        h, w, _ = frame.shape
-        overlay = frame.copy()
-        
-        # Top HUD Dashboard Bar
-        hud_h = 145
-        cv2.rectangle(overlay, (0, 0), (w, hud_h), (18, 18, 24), -1)
-        cv2.rectangle(overlay, (0, h - 35), (w, h), (18, 18, 24), -1)
-        cv2.addWeighted(overlay, 0.85, frame, 0.15, 0, frame)
-        
-        cv2.putText(frame, "PEDESTRIAN CROSSING SAFETY MONITOR", (12, 22),
-                    cv2.FONT_HERSHEY_DUPLEX, 0.52, (255, 255, 255), 1, cv2.LINE_AA)
-                    
-        active_count = len([p for p in tracked_persons if p.active_monitor])
-        cv2.putText(frame, f"Active Pedestrians in POI: {active_count}", (w - 240, 22),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.44, (0, 220, 255), 1, cv2.LINE_AA)
-                    
-        # If there are tracked persons, render active checklist for first/primary person
-        if tracked_persons:
-            primary = tracked_persons[0]
-            
-            s1_c = (50, 240, 50) if primary.step1_ok else ((0, 0, 255) if primary.is_ng else (140, 140, 140))
-            s1_s = "OK" if primary.step1_ok else ("NG" if primary.is_ng else "--")
-            cv2.putText(frame, f"Person #{primary.track_id} Step 1: Look & Point LEFT   [{s1_s}]", (14, 46),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.42, s1_c, 1, cv2.LINE_AA)
-                        
-            s2_c = (50, 240, 50) if primary.step2_ok else ((0, 0, 255) if (primary.is_ng and not primary.step2_ok) else (140, 140, 140))
-            s2_s = "OK" if primary.step2_ok else ("NG" if primary.is_ng else "--")
-            cv2.putText(frame, f"Person #{primary.track_id} Step 2: Look & Point RIGHT  [{s2_s}]", (14, 66),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.42, s2_c, 1, cv2.LINE_AA)
-                        
-            s3_c = (50, 240, 50) if primary.step3_ok else ((0, 0, 255) if (primary.is_ng and not primary.step3_ok) else (140, 140, 140))
-            s3_s = "OK" if primary.step3_ok else ("NG" if primary.is_ng else "--")
-            cv2.putText(frame, f"Person #{primary.track_id} Step 3: Look & Point FRONT  [{s3_s}]", (14, 86),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.42, s3_c, 1, cv2.LINE_AA)
-                        
-            # Total Card
-            if primary.total_ok:
-                cv2.rectangle(frame, (10, 102), (w - 10, 134), (30, 180, 30), -1)
-                cv2.putText(frame, f"PERSON #{primary.track_id}: TOTAL OK (PASS - SAFE TO CROSS)", (18, 124),
-                            cv2.FONT_HERSHEY_DUPLEX, 0.48, (255, 255, 255), 1, cv2.LINE_AA)
-            elif primary.is_ng:
-                cv2.rectangle(frame, (10, 102), (w - 10, 134), (0, 0, 200), -1)
-                cv2.putText(frame, f"PERSON #{primary.track_id}: ALARM NG - SAFETY PROTOCOL VIOLATION!", (18, 124),
-                            cv2.FONT_HERSHEY_DUPLEX, 0.46, (255, 255, 255), 1, cv2.LINE_AA)
-            else:
-                cv2.rectangle(frame, (10, 102), (w - 10, 134), (50, 120, 200), -1)
-                cv2.putText(frame, f"PERSON #{primary.track_id}: MONITORING SAFETY SEQUENCE...", (18, 124),
-                            cv2.FONT_HERSHEY_DUPLEX, 0.46, (255, 255, 255), 1, cv2.LINE_AA)
+        if person.total_ok:
+            # TOTAL OK
+            face_path = person.save_face_image()
+            evidence_path = person.save_evidence_video()
+            record_data = {
+                "event_uuid": person.event_uuid,
+                "track_id": person.track_id,
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp_sec)),
+                "status": "TOTAL_OK",
+                "step1_status": "OK",
+                "step2_status": "OK",
+                "step3_status": "OK",
+                "duration_sec": timestamp_sec - person.entry_time,
+                "face_image_path": face_path,
+                "evidence_video_path": evidence_path,
+                "metadata": {"in_poi": person.in_poi}
+            }
+            record_id = self.db.insert_record(record_data)
+            person.db_logged = True
+            print(f"\n[JUDGMENT: TOTAL OK] Person #{person.track_id} crossed with complete standard! Logged to DB (ID: {record_id})")
         else:
-            cv2.putText(frame, "Waiting for pedestrian to enter Point of Interest (POI)...", (14, 60),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.46, (180, 180, 180), 1, cv2.LINE_AA)
+            # NG - Person left POI without completing 3 steps!
+            person.is_ng = True
+            
+            # 1. Trigger Voice Warning Alarm
+            if not person.alarm_triggered:
+                self.alarm.play_alarm(reason="Left POI without completing 3 safety steps")
+                person.alarm_triggered = True
+                
+            # 2. Save Snapped Face & Evidence Video
+            face_path = person.save_face_image()
+            evidence_path = person.save_evidence_video()
+            
+            # 3. Log to DB
+            record_data = {
+                "event_uuid": person.event_uuid,
+                "track_id": person.track_id,
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp_sec)),
+                "status": "NG",
+                "step1_status": "OK" if person.step1_ok else "NG",
+                "step2_status": "OK" if person.step2_ok else "NG",
+                "step3_status": "OK" if person.step3_ok else "NG",
+                "duration_sec": timestamp_sec - person.entry_time,
+                "face_image_path": face_path,
+                "evidence_video_path": evidence_path,
+                "metadata": {"in_poi": person.in_poi, "reason": "Left POI without completing standard"}
+            }
+            record_id = self.db.insert_record(record_data)
+            person.db_logged = True
+            self.last_ng_event = record_data
+            print(f"\n[JUDGMENT: NG ALERT] 🚨 Person #{person.track_id} left POI without standard! Voice alarm played. Logged to DB (ID: {record_id})")
+            
+            # 4. External Face Recognition
+            if person.best_face_image is not None:
+                self.face_client.recognize_face_async(person.best_face_image, record_id, metadata=record_data)
+
+    def _draw_active_people_panel(self, frame, tracked_persons):
+        """
+        Draws active people side panel on the screen:
+        Shows only Face thumbnail and Status of Step 1, 2, 3 for each active person.
+        """
+        h, w, _ = frame.shape
+        
+        # Panel Dimensions
+        panel_w = 260
+        panel_x = w - panel_w - 10
+        panel_y = 10
+        
+        active_list = [p for p in tracked_persons if p.active_monitor or p.entered_poi_once]
+        if not active_list:
+            # Draw idle banner
+            overlay = frame.copy()
+            cv2.rectangle(overlay, (panel_x, panel_y), (w - 10, panel_y + 40), (20, 20, 26), -1)
+            cv2.addWeighted(overlay, 0.80, frame, 0.20, 0, frame)
+            cv2.rectangle(frame, (panel_x, panel_y), (w - 10, panel_y + 40), (60, 60, 70), 1)
+            cv2.putText(frame, "ACTIVE MONITOR: IDLE", (panel_x + 12, panel_y + 25),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.42, (180, 180, 180), 1, cv2.LINE_AA)
+            return frame
+
+        # Render panel container
+        card_h = 75
+        total_panel_h = min(h - 20, len(active_list) * (card_h + 8) + 36)
+        
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (panel_x, panel_y), (w - 10, panel_y + total_panel_h), (18, 20, 28), -1)
+        cv2.addWeighted(overlay, 0.88, frame, 0.12, 0, frame)
+        cv2.rectangle(frame, (panel_x, panel_y), (w - 10, panel_y + total_panel_h), (0, 200, 255), 1)
+        
+        # Header
+        cv2.putText(frame, f"ACTIVE PEOPLE IN POI ({len(active_list)})", (panel_x + 10, panel_y + 20),
+                    cv2.FONT_HERSHEY_DUPLEX, 0.42, (0, 220, 255), 1, cv2.LINE_AA)
+
+        curr_y = panel_y + 30
+        for person in active_list:
+            if curr_y + card_h > h - 10:
+                break
+                
+            # Card background
+            card_bg = (30, 34, 46)
+            cv2.rectangle(frame, (panel_x + 6, curr_y), (w - 16, curr_y + card_h), card_bg, -1)
+            cv2.rectangle(frame, (panel_x + 6, curr_y), (w - 16, curr_y + card_h), (50, 60, 80), 1)
+            
+            # 1. Face Avatar / Thumbnail
+            face_size = 54
+            face_x = panel_x + 12
+            face_y = curr_y + 10
+            
+            if person.best_face_image is not None and person.best_face_image.size > 0:
+                try:
+                    resized_face = cv2.resize(person.best_face_image, (face_size, face_size))
+                    frame[face_y:face_y+face_size, face_x:face_x+face_size] = resized_face
+                except Exception:
+                    cv2.rectangle(frame, (face_x, face_y), (face_x+face_size, face_y+face_size), (80, 80, 90), -1)
+            else:
+                cv2.rectangle(frame, (face_x, face_y), (face_x+face_size, face_y+face_size), (40, 45, 60), -1)
+                cv2.putText(frame, "FACE", (face_x + 12, face_y + 32),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.36, (140, 140, 150), 1, cv2.LINE_AA)
+                            
+            cv2.rectangle(frame, (face_x, face_y), (face_x+face_size, face_y+face_size), (0, 200, 255), 1)
+
+            # 2. Person Title & Overall Badge
+            info_x = face_x + face_size + 10
+            cv2.putText(frame, f"Person #{person.track_id}", (info_x, curr_y + 18),
+                        cv2.FONT_HERSHEY_DUPLEX, 0.44, (255, 255, 255), 1, cv2.LINE_AA)
                         
-        # Bottom Bar: System Status
-        status_msg = "ACTIVE MONITOR ON | VOICE ALARM READY | DB LOGGING ENABLED"
-        cv2.putText(frame, status_msg, (12, h - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (0, 255, 180), 1, cv2.LINE_AA)
+            # 3. Step 1, Step 2, Step 3 Badges
+            # Step 1
+            s1_col = (0, 240, 0) if person.step1_ok else ((0, 0, 255) if person.is_ng else (140, 140, 140))
+            s1_txt = "S1:OK" if person.step1_ok else "S1:--"
+            cv2.putText(frame, s1_txt, (info_x, curr_y + 36), cv2.FONT_HERSHEY_SIMPLEX, 0.38, s1_col, 1, cv2.LINE_AA)
+            
+            # Step 2
+            s2_col = (0, 240, 0) if person.step2_ok else ((0, 0, 255) if person.is_ng else (140, 140, 140))
+            s2_txt = "S2:OK" if person.step2_ok else "S2:--"
+            cv2.putText(frame, s2_txt, (info_x + 56, curr_y + 36), cv2.FONT_HERSHEY_SIMPLEX, 0.38, s2_col, 1, cv2.LINE_AA)
+            
+            # Step 3
+            s3_col = (0, 240, 0) if person.step3_ok else ((0, 0, 255) if person.is_ng else (140, 140, 140))
+            s3_txt = "S3:OK" if person.step3_ok else "S3:--"
+            cv2.putText(frame, s3_txt, (info_x + 112, curr_y + 36), cv2.FONT_HERSHEY_SIMPLEX, 0.38, s3_col, 1, cv2.LINE_AA)
+            
+            # Overall Status Label
+            if person.total_ok:
+                status_str = "STATUS: TOTAL OK (SAFE)"
+                st_color = (0, 255, 120)
+            elif person.is_ng:
+                status_str = "STATUS: NG (VIOLATION)"
+                st_color = (0, 70, 255)
+            else:
+                status_str = "STATUS: IN PROGRESS..."
+                st_color = (0, 200, 255)
+                
+            cv2.putText(frame, status_str, (info_x, curr_y + 54),
+                        cv2.FONT_HERSHEY_DUPLEX, 0.36, st_color, 1, cv2.LINE_AA)
+                        
+            curr_y += card_h + 8
+            
         return frame
 
     def generate_final_report(self):
-        """Returns structured JSON summary of check session"""
+        # Trigger judgment on any active persons before session wrapup
+        now = time.time()
+        for p in self.tracker.tracked_persons.values():
+            if p.entered_poi_once and not p.judged:
+                self._judge_person_outcome(p, now)
+                
         persons_report = []
+        all_passed = True if self.tracker.tracked_persons else False
         for p in self.tracker.tracked_persons.values():
             persons_report.append({
                 "track_id": p.track_id,
@@ -417,12 +440,10 @@ class RoadCrossingSafetyChecker:
                 "total": "TOTAL OK" if p.total_ok else "TOTAL NG",
                 "is_standard_compliant": bool(p.total_ok)
             })
-            
-        all_passed = (len(persons_report) > 0 and all(pr["is_standard_compliant"] for pr in persons_report))
-        
-        # Primary person fallback
+            if not p.total_ok:
+                all_passed = False
+                
         p1 = self.active_tracked_persons[0] if self.active_tracked_persons else None
-        
         return {
             "step1_look_point_left": "OK" if (p1 and p1.step1_ok) else "NG",
             "step2_look_point_right": "OK" if (p1 and p1.step2_ok) else "NG",

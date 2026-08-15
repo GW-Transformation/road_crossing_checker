@@ -7,12 +7,16 @@ __pycache__/
 *.pyo
 *.pyd
 
-# Outputs & Test Dumps
-output_*.mp4
+# Evidence & Local DB data
+data/evidence/
+data/faces/
+data/*.db
+data/*.sqlite
+*.mp4
 inspect_frames/
 *.csv
 
-# OS files
+# OS & Editor files
 .DS_Store
 Thumbs.db
 .idea/

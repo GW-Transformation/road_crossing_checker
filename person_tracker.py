@@ -7,7 +7,8 @@ from collections import deque
 
 class TrackedPerson:
     """
-    State and tracking container for an individual person in camera view.
+    State container for an individual person in camera view.
+    Tracks POI presence, safety checklist, face snapshot, and evidence video buffer.
     """
     def __init__(self, track_id, bbox_norm, entry_time=None):
         self.track_id = track_id
@@ -18,6 +19,10 @@ class TrackedPerson:
         self.last_seen_time = self.entry_time
         
         self.in_poi = False
+        self.previously_in_poi = False
+        self.entered_poi_once = False
+        self.frames_in_poi = 0
+        self.exited_poi = False
         self.active_monitor = False # True when in POI
         
         # 3-Step Safety Standards
@@ -26,6 +31,7 @@ class TrackedPerson:
         self.step3_ok = False
         self.total_ok = False
         self.is_ng = False
+        self.judged = False # True once judged as OK or NG
         
         self.step1_hold_count = 0
         self.step2_hold_count = 0
@@ -39,16 +45,16 @@ class TrackedPerson:
         self.best_face_image = None
         self.best_face_score = 0.0
         
-        # Evidence Recording Buffer (stores up to ~150 frames = 5 seconds)
-        self.evidence_buffer = deque(maxlen=150)
+        # Evidence Recording Buffer (stores up to ~180 frames = 6 seconds)
+        self.evidence_buffer = deque(maxlen=180)
         
         # Alarms & DB Status
         self.alarm_triggered = False
         self.db_logged = False
         self.event_uuid = str(uuid.uuid4())[:8]
         
-        # Movement / Cross detection
-        self.trajectory = [] # list of (x, y, t)
+        # Trajectory
+        self.trajectory = []
 
     def update_position(self, bbox_norm, current_time):
         self.bbox_norm = bbox_norm
@@ -58,8 +64,22 @@ class TrackedPerson:
         if len(self.trajectory) > 60:
             self.trajectory.pop(0)
 
+    def set_poi_state(self, current_in_poi):
+        self.previously_in_poi = self.in_poi
+        self.in_poi = current_in_poi
+        
+        if current_in_poi:
+            self.frames_in_poi += 1
+            if self.frames_in_poi >= 5:
+                self.entered_poi_once = True
+            self.active_monitor = True
+        else:
+            if self.previously_in_poi and self.entered_poi_once:
+                # Person just stepped out of the POI zone
+                self.exited_poi = True
+
     def update_face(self, face_crop, score=1.0):
-        if face_crop is not None and face_crop.size > 0 and score > self.best_face_score:
+        if face_crop is not None and face_crop.size > 0 and score >= self.best_face_score:
             self.best_face_image = face_crop.copy()
             self.best_face_score = score
 
@@ -93,23 +113,22 @@ class SimpleMultiPersonTracker:
     """
     Lightweight Centroid & IOU based tracker for embedded platforms.
     """
-    def __init__(self, max_disappeared_sec=2.0, iou_dist_threshold=0.35):
+    def __init__(self, max_disappeared_sec=2.5, iou_dist_threshold=0.55):
         self.next_track_id = 1
         self.tracked_persons = {} # track_id -> TrackedPerson
         self.max_disappeared_sec = max_disappeared_sec
         self.iou_dist_threshold = iou_dist_threshold
+        self.recently_removed_persons = []
 
     def update(self, detected_bboxes_norm, current_time):
-        """
-        detected_bboxes_norm: list of (x1, y1, x2, y2) normalized [0..1]
-        Returns: list of TrackedPerson objects
-        """
+        self.recently_removed_persons = []
+        
         if len(detected_bboxes_norm) == 0:
-            # Check for timed out persons
             removed_ids = []
             for tid, person in self.tracked_persons.items():
                 if (current_time - person.last_seen_time) > self.max_disappeared_sec:
                     removed_ids.append(tid)
+                    self.recently_removed_persons.append(person)
             for tid in removed_ids:
                 del self.tracked_persons[tid]
             return list(self.tracked_persons.values())
@@ -121,16 +140,13 @@ class SimpleMultiPersonTracker:
                 self.next_track_id += 1
             return list(self.tracked_persons.values())
 
-        # Match existing tracked persons to detections using distance between centroids
         track_ids = list(self.tracked_persons.keys())
         track_centroids = [self.tracked_persons[tid].centroid_norm for tid in track_ids]
-        
         det_centroids = [((b[0]+b[2])/2.0, (b[1]+b[3])/2.0) for b in detected_bboxes_norm]
 
         matched_tracks = set()
         matched_dets = set()
 
-        # Compute cost matrix
         for d_idx, d_cen in enumerate(det_centroids):
             best_t_idx = -1
             min_dist = float("inf")
@@ -148,18 +164,17 @@ class SimpleMultiPersonTracker:
                 tid = track_ids[best_t_idx]
                 self.tracked_persons[tid].update_position(detected_bboxes_norm[d_idx], current_time)
 
-        # Unmatched detections -> new persons
         for d_idx, bbox in enumerate(detected_bboxes_norm):
             if d_idx not in matched_dets:
                 person = TrackedPerson(self.next_track_id, bbox, entry_time=current_time)
                 self.tracked_persons[self.next_track_id] = person
                 self.next_track_id += 1
 
-        # Remove timed out persons
         removed_ids = []
         for tid, person in self.tracked_persons.items():
             if (current_time - person.last_seen_time) > self.max_disappeared_sec:
                 removed_ids.append(tid)
+                self.recently_removed_persons.append(person)
         for tid in removed_ids:
             del self.tracked_persons[tid]
 
