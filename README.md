@@ -1,47 +1,56 @@
 # Pedestrian Road Crossing Safety Standard Checker 🚸
 
-An embedded-ready AI computer vision application for detecting and verifying if a pedestrian follows the safety crossing standard before crossing the road.
+An embedded-ready AI computer vision and safety enforcement system designed to verify if pedestrians follow the 3-step safety standard before crossing the road.
 
-## 🎯 Safety Standard Rules
+---
+
+## 🎯 Safety Standard Protocol
 1. **Step 1:** Look Left **AND** Point finger/hand to Left simultaneously.
 2. **Step 2:** Look Right **AND** Point finger/hand to Right simultaneously.
 3. **Step 3:** Look Forward **AND** Point finger/hand Forward simultaneously.
-4. **Total Evaluation:** If all 3 steps pass sequentially ➔ **TOTAL OK (SAFE TO CROSS)**. If any step is missed or failed ➔ Displays **Step NG** and **TOTAL NG**.
+4. **Outcome Evaluation:**
+   - **TOTAL OK (PASS):** All 3 steps executed in order ➔ Logged as compliant.
+   - **SAFETY VIOLATION (NG):** Incomplete or incorrect steps ➔ Triggers voice alarm warning, snaps face image, clips evidence video, and queries External Face Recognition API.
 
 ---
 
-## ⚡ Key Features & Embedded Optimization
-- **Ultra-lightweight:** Powered by MediaPipe Pose Lite (TFLite / XNNPACK).
-- **Embedded Hardware Compatible:** Runs smoothly on Raspberry Pi 4 / 5, low-spec PCs, Intel NUC, and Jetson Nano.
-- **Universal Input:** Webcams (`0`, `1`), CCTV / IP Cameras (`rtsp://...`, `http://...`), or Video files (`.mov`, `.mp4`).
-- **Real-Time On-Screen HUD:** Visual step checklist with live indicators and skeleton overlay.
-- **CSV Event Logging:** Automatically logs all pass/fail events with timestamps.
-- **Headless Mode:** Can run without a GUI display as a background daemon on embedded Linux/Raspberry Pi.
+## 🚀 Key Features
+- **Point of Interest (POI) Corridor:** Define safety crossing zones via polygon coordinates (`poi_config.json`).
+- **Active Face & Person Monitoring:** Activates tracking and monitoring when a person/face enters the POI.
+- **Multi-Person Tracking:** Tracks individual pedestrians with separate safety checklists.
+- **🔊 Voice Alarm Warning:** Plays *"กรุณาหยุด ชี้นิ้วตามทางแยกให้ถูกต้อง"* in real-time upon violation.
+- **📸 Face Snapping & Evidence Video:** Captures high-res face crops and clips evidence video of the entire crossing event.
+- **🌐 External Face Recognition API Integration:** Webhook client to match and identify pedestrians against external HR/security systems.
+- **💾 SQLite Database Logging:** Full audit log of all events, timestamps, face paths, and video recordings.
+- **🖥️ Web Incident Dashboard & REST API:** Built-in web dashboard (`http://localhost:5000`) with video playback and record retrieval.
+- **⚡ Embedded Ready:** Optimized for Raspberry Pi 4 / 5 and low-spec hardware using lightweight MediaPipe Pose.
 
 ---
 
-## 🚀 Quick Start Guide
+## 💻 How to Run
 
-### 1. Run on Webcam (Live Stream)
+### 1. Run Live Webcam
 ```bash
-./venv/bin/python app.py --source 0
+/Users/m4ck/projects/road_crossing_checker/venv/bin/python app.py --source 0 --web
+```
+*Access the Web Incident Dashboard at `http://localhost:5000` while camera runs.*
+
+### 2. Run CCTV / IP RTSP Stream
+```bash
+/Users/m4ck/projects/road_crossing_checker/venv/bin/python app.py --source "rtsp://username:password@camera_ip:554/stream" --web
 ```
 
-### 2. Run on CCTV / RTSP Stream
+### 3. Run on Video Files (Test with 1.mov / 2.mov)
 ```bash
-./venv/bin/python app.py --source rtsp://admin:password@192.168.1.100:554/stream1
+/Users/m4ck/projects/road_crossing_checker/venv/bin/python app.py --source ~/Desktop/1.mov --output output_1.mp4
 ```
 
-### 3. Run on Test Videos (e.g. 1.mov and 2.mov)
+### 4. Start Standalone Web Incident Dashboard
 ```bash
-# Test 1.mov and record annotated output
-./venv/bin/python app.py --source ~/Desktop/1.mov --output output_1.mp4
-
-# Test 2.mov
-./venv/bin/python app.py --source ~/Desktop/2.mov --output output_2.mp4
+/Users/m4ck/projects/road_crossing_checker/venv/bin/python web_dashboard.py
 ```
 
-### 4. Run Automated Test Suite
+### 5. Run Automated Verification Tests
 ```bash
-./venv/bin/python test_edge_cases.py
+/Users/m4ck/projects/road_crossing_checker/venv/bin/python test_advanced_features.py
 ```
