@@ -38,13 +38,32 @@ def api_poi():
         return jsonify({"success": True, "poi_polygon": poi.polygon})
     return jsonify({"success": True, "poi_polygon": poi.polygon})
 
+@app.route("/api/records/delete", methods=["POST"])
+def api_delete_records():
+    data = request.get_json() or {}
+    ids = data.get("ids", [])
+    if isinstance(ids, int):
+        ids = [ids]
+    deleted = db.delete_records(ids)
+    return jsonify({"success": True, "deleted_count": deleted, "stats": db.get_stats()})
+
+@app.route("/api/records/clear_all", methods=["POST"])
+def api_clear_all_records():
+    db.clear_all_records()
+    return jsonify({"success": True, "message": "All records cleared", "stats": db.get_stats()})
+
 @app.route("/data/faces/<path:filename>")
+@app.route("/faces/<path:filename>")
 def serve_face(filename):
-    return send_from_directory("data/faces", filename)
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    return send_from_directory(os.path.join(base_dir, "data", "faces"), filename)
 
 @app.route("/data/evidence/<path:filename>")
+@app.route("/evidence/<path:filename>")
 def serve_evidence(filename):
-    return send_from_directory("data/evidence", filename)
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    ev_dir = os.path.join(base_dir, "data", "evidence")
+    return send_from_directory(ev_dir, filename, mimetype="video/mp4")
 
 # Mock External Face Recognition Server endpoint for instant testing
 @app.route("/api/mock_face_recognition", methods=["POST"])

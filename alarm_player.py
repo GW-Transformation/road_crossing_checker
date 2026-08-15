@@ -7,58 +7,78 @@ import platform
 
 class AlarmWarningPlayer:
     """
-    Asynchronous voice warning dispatcher for Safety NG alerts:
-    Warning voice: "กรุณาหยุด ชี้นิ้วตามทางแยกให้ถูกต้อง"
+    Audio Dispatcher for:
+      1. Voice warning on NG: "กรุณาหยุด ชี้นิ้วตามทางแยกให้ถูกต้อง"
+      2. Short confirmation chime on Step OK (Step 1, 2, 3)
     """
-    def __init__(self, audio_path=None, cooldown_sec=4.0, enabled=True):
+    def __init__(self, audio_path=None, chime_path=None, cooldown_sec=3.5, enabled=True):
         self.enabled = enabled
         self.cooldown_sec = cooldown_sec
-        self.last_play_time = 0
+        self.last_alarm_time = 0
+        self.last_chime_time = 0
         self.lock = threading.Lock()
         
-        if audio_path is None:
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-            self.audio_path = os.path.join(base_dir, "assets", "warning_alarm.mp3")
-        else:
-            self.audio_path = audio_path
-            
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        self.audio_path = audio_path or os.path.join(base_dir, "assets", "warning_alarm.mp3")
+        self.chime_path = chime_path or os.path.join(base_dir, "assets", "step_ok_chime.wav")
         self.os_type = platform.system()
 
-    def play_alarm(self, reason="Safety Standard NG"):
+    def play_step_ok(self, step_num=1):
+        """Plays short, crisp confirmation tone to signal step is OK"""
         if not self.enabled:
             return False
             
         with self.lock:
             now = time.time()
-            if now - self.last_play_time < self.cooldown_sec:
-                # Still within cooldown
+            if now - self.last_chime_time < 0.25:
                 return False
-            self.last_play_time = now
+            self.last_chime_time = now
 
-        threading.Thread(target=self._play_worker, daemon=True).start()
+        threading.Thread(target=self._play_sound_file, args=(self.chime_path, "Step OK Chime"), daemon=True).start()
         return True
 
-    def _play_worker(self):
-        print(f"[ALARM WARNING] 🔊 Triggered voice alert: 'กรุณาหยุด ชี้นิ้วตามทางแยกให้ถูกต้อง'")
+    def play_alarm(self, reason="Safety Standard NG"):
+        """Plays voice warning on safety violation"""
+        if not self.enabled:
+            return False
+            
+        with self.lock:
+            now = time.time()
+            if now - self.last_alarm_time < self.cooldown_sec:
+                return False
+            self.last_alarm_time = now
+
+        threading.Thread(target=self._play_alarm_worker, daemon=True).start()
+        return True
+
+    def _play_sound_file(self, file_path, label="Sound"):
+        if not os.path.exists(file_path):
+            return
         try:
             if self.os_type == "Darwin": # macOS
+                subprocess.run(["afplay", file_path], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            elif self.os_type == "Linux": # Linux / Raspberry Pi
+                subprocess.run(["aplay", "-q", file_path], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            elif self.os_type == "Windows":
+                import winsound
+                winsound.PlaySound(file_path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+        except Exception as e:
+            pass
+
+    def _play_alarm_worker(self):
+        print(f"[ALARM WARNING] 🔊 Triggered voice alert: 'กรุณาหยุด ชี้นิ้วตามทางแยกให้ถูกต้อง'")
+        try:
+            if self.os_type == "Darwin":
                 if os.path.exists(self.audio_path):
                     subprocess.run(["afplay", self.audio_path], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 else:
-                    # Fallback to macOS say
                     subprocess.run(["say", "-v", "Kanya", "กรุณาหยุด ชี้นิ้วตามทางแยกให้ถูกต้อง"], check=False)
-            elif self.os_type == "Linux": # Raspberry Pi / Linux
+            elif self.os_type == "Linux":
                 if os.path.exists(self.audio_path):
-                    # Try mpg123, ffplay, or aplay
                     res = subprocess.run(["mpg123", "-q", self.audio_path], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                     if res.returncode != 0:
                         subprocess.run(["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", self.audio_path], check=False)
-                else:
-                    print("[WARN] Audio file not found for Linux playback")
             elif self.os_type == "Windows":
-                # Windows powershell or cmd playback
-                import winsound
-                # winsound plays wav, or start file
                 os.system(f'start /min "" "{self.audio_path}"')
         except Exception as e:
-            print(f"[WARN] Audio playback error: {e}")
+            print(f"[WARN] Alarm audio error: {e}")

@@ -17,7 +17,7 @@
     }
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
     body { background: var(--bg); color: var(--text); padding: 24px; }
-    .container { max-width: 1280px; margin: 0 auto; }
+    .container { max-width: 1300px; margin: 0 auto; }
     
     header { display: flex; justify-content: space-between; align-items: center; padding-bottom: 20px; border-bottom: 1px solid var(--border); margin-bottom: 24px; }
     h1 { font-size: 24px; font-weight: 700; display: flex; align-items: center; gap: 10px; }
@@ -31,11 +31,11 @@
     .stat-label { font-size: 12px; color: var(--muted); text-transform: uppercase; font-weight: 600; }
     .stat-num { font-size: 32px; font-weight: 700; margin-top: 6px; }
     
-    .layout { display: grid; grid-template-columns: 2.2fr 1fr; gap: 24px; }
+    .layout { display: grid; grid-template-columns: 2.3fr 1fr; gap: 24px; }
     @media (max-width: 960px) { .layout { grid-template-columns: 1fr; } }
     
     .card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin-bottom: 24px; }
-    .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+    .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 10px; }
     .card-title { font-size: 16px; font-weight: 600; }
     
     table { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -53,14 +53,16 @@
     .btn:hover { background: #30363d; }
     .btn-play { background: #1f6feb; border-color: #388bfd; color: white; }
     .btn-play:hover { background: #388bfd; }
+    .btn-danger { background: rgba(248,81,73,0.15); border-color: var(--danger); color: #ff7b72; }
+    .btn-danger:hover { background: var(--danger); color: white; }
     
-    /* Video Modal */
+    /* Video / Image Modal */
     .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 1000; align-items: center; justify-content: center; }
     .modal.active { display: flex; }
     .modal-content { background: var(--card); border: 1px solid var(--border); border-radius: 8px; width: 90%; max-width: 680px; padding: 20px; position: relative; }
-    .modal-close { position: absolute; top: 12px; right: 14px; font-size: 20px; cursor: pointer; color: var(--muted); border: none; background: none; }
+    .modal-close { position: absolute; top: 12px; right: 14px; font-size: 22px; cursor: pointer; color: var(--muted); border: none; background: none; }
     .modal-close:hover { color: var(--text); }
-    video { width: 100%; border-radius: 6px; margin-top: 12px; background: #000; }
+    video { width: 100%; border-radius: 6px; margin-top: 12px; background: #000; max-height: 480px; }
   </style>
 </head>
 <body>
@@ -75,19 +77,19 @@
     <div class="stats-row">
       <div class="stat-card">
         <div class="stat-label">Total Evaluated</div>
-        <div class="stat-num">{{ stats.total_events }}</div>
+        <div class="stat-num" id="stat-total">{{ stats.total_events }}</div>
       </div>
       <div class="stat-card">
         <div class="stat-label">Standard OK (Safe)</div>
-        <div class="stat-num" style="color: var(--success);">{{ stats.total_ok }}</div>
+        <div class="stat-num" id="stat-ok" style="color: var(--success);">{{ stats.total_ok }}</div>
       </div>
       <div class="stat-card">
         <div class="stat-label">Safety Violations (NG)</div>
-        <div class="stat-num" style="color: var(--danger);">{{ stats.total_ng }}</div>
+        <div class="stat-num" id="stat-ng" style="color: var(--danger);">{{ stats.total_ng }}</div>
       </div>
       <div class="stat-card">
         <div class="stat-label">Compliance Rate</div>
-        <div class="stat-num" style="color: var(--accent);">{{ "%.1f"|format(stats.compliance_rate) }}%</div>
+        <div class="stat-num" id="stat-rate" style="color: var(--accent);">{{ "%.1f"|format(stats.compliance_rate) }}%</div>
       </div>
     </div>
 
@@ -97,11 +99,20 @@
         <div class="card">
           <div class="card-header">
             <span class="card-title">📋 Pedestrian Crossing History & Evidence</span>
-            <button class="btn" onclick="location.reload()">🔄 Refresh</button>
+            <div style="display: flex; gap: 8px; align-items: center;">
+              <button class="btn btn-danger" id="btn-delete-selected" onclick="deleteSelected()" style="display: none;">
+                🗑️ Delete Selected (<span id="selected-count">0</span>)
+              </button>
+              <button class="btn btn-danger" onclick="clearAllLogs()">
+                🧹 Clear All Logs
+              </button>
+              <button class="btn" onclick="location.reload()">🔄 Refresh</button>
+            </div>
           </div>
           <table>
             <thead>
               <tr>
+                <th style="width: 32px;"><input type="checkbox" id="check-all" onchange="toggleSelectAll(this)"></th>
                 <th>Face</th>
                 <th>Track / UUID</th>
                 <th>Outcome</th>
@@ -111,12 +122,13 @@
                 <th>Evidence</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody id="records-tbody">
               {% for rec in records %}
-              <tr>
+              <tr id="row-{{ rec.id }}">
+                <td><input type="checkbox" class="row-check" value="{{ rec.id }}" onchange="updateSelectedCount()"></td>
                 <td>
                   {% if rec.face_image_path %}
-                  <img src="/{{ rec.face_image_path }}" class="face-avatar" alt="Face" onclick="openMediaModal('image', '/{{ rec.face_image_path }}', 'Person #{{ rec.track_id }}')">
+                  <img src="/{{ rec.face_image_path }}" class="face-avatar" alt="Face" onclick="openMediaModal('image', '/{{ rec.face_image_path }}', 'Person #{{ rec.track_id }} Face')">
                   {% else %}
                   <div style="width: 48px; height: 48px; background: #21262d; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 10px; color: var(--muted);">NO PIC</div>
                   {% endif %}
@@ -156,7 +168,7 @@
               </tr>
               {% else %}
               <tr>
-                <td colspan="7" style="text-align: center; color: var(--muted); padding: 32px;">No crossing incidents recorded yet.</td>
+                <td colspan="8" style="text-align: center; color: var(--muted); padding: 32px;">No crossing incidents recorded yet.</td>
               </tr>
               {% endfor %}
             </tbody>
@@ -164,22 +176,26 @@
         </div>
       </div>
 
-      <!-- Right Column: Safety Rules & Alarm Info -->
+      <!-- Right Column: Safety Rules & Audio Protocol -->
       <div>
         <div class="card">
           <div class="card-header">
-            <span class="card-title">🔊 Warning Alarm Protocol</span>
+            <span class="card-title">🔊 Audio Signals & Voice Alarm</span>
           </div>
-          <p style="font-size: 13px; color: var(--muted); margin-bottom: 10px;">
-            Audio is played <strong>ONLY</strong> when a person who was in the POI leaves without completing all 3 safety steps:
+          
+          <p style="font-size: 13px; font-weight: 600; margin-bottom: 6px;">1. Step Confirmation Sound 🔔</p>
+          <p style="font-size: 12px; color: var(--muted); margin-bottom: 14px;">
+            A crisp confirmation chime plays instantly when each step (Look+Point Left, Right, Forward) is completed to signal OK to the pedestrian.
           </p>
+
+          <p style="font-size: 13px; font-weight: 600; margin-bottom: 6px;">2. NG Violation Voice Alert 🚨</p>
           <div style="background: rgba(248,81,73,0.1); border-left: 3px solid var(--danger); padding: 12px; border-radius: 4px; margin-bottom: 12px;">
             <p style="font-size: 14px; font-weight: 600; color: #ff7b72;">
               "กรุณาหยุด ชี้นิ้วตามทางแยกให้ถูกต้อง"
             </p>
           </div>
           <p style="font-size: 12px; color: var(--muted);">
-            Compliant pedestrians who finish Look+Point Left, Right, and Forward cross silently with <strong>TOTAL OK</strong>.
+            Triggers only when a pedestrian exits the crossing POI without having completed all 3 safety steps.
           </p>
         </div>
 
@@ -193,7 +209,7 @@
             </svg>
           </div>
           <p style="font-size: 12px; color: var(--muted); margin-top: 10px;">
-            Pedestrians are actively tracked once their bounding box enters this designated safety corridor.
+            Designated safety corridor for crossing verification.
           </p>
         </div>
       </div>
@@ -216,15 +232,84 @@
       document.getElementById('poi-svg').setAttribute('points', pts);
     }
 
+    function toggleSelectAll(master) {
+      const checks = document.querySelectorAll('.row-check');
+      checks.forEach(c => c.checked = master.checked);
+      updateSelectedCount();
+    }
+
+    function updateSelectedCount() {
+      const checked = document.querySelectorAll('.row-check:checked');
+      const count = checked.length;
+      document.getElementById('selected-count').innerText = count;
+      const btn = document.getElementById('btn-delete-selected');
+      btn.style.display = count > 0 ? 'inline-flex' : 'none';
+    }
+
+    function deleteSelected() {
+      const checked = document.querySelectorAll('.row-check:checked');
+      const ids = Array.from(checked).map(c => parseInt(c.value));
+      if (!ids.length) return;
+      if (!confirm(`Are you sure you want to delete ${ids.length} selected record(s) and their evidence files?`)) return;
+
+      fetch('/api/records/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: ids })
+      })
+      .then(res => res.json())
+      .then(data => {
+        if (data.success) {
+          ids.forEach(id => {
+            const row = document.getElementById(`row-${id}`);
+            if (row) row.remove();
+          });
+          updateSelectedCount();
+          refreshStats(data.stats);
+        }
+      });
+    }
+
+    function clearAllLogs() {
+      if (!confirm('⚠️ Are you sure you want to CLEAR ALL logs and delete all evidence media?')) return;
+      fetch('/api/records/clear_all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirm: true })
+      })
+      .then(res => res.json())
+      .then(data => {
+        if (data.success) {
+          document.getElementById('records-tbody').innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--muted); padding: 32px;">No crossing incidents recorded yet.</td></tr>';
+          updateSelectedCount();
+          refreshStats(data.stats);
+        }
+      });
+    }
+
+    function refreshStats(stats) {
+      if (!stats) return;
+      document.getElementById('stat-total').innerText = stats.total_events || 0;
+      document.getElementById('stat-ok').innerText = stats.total_ok || 0;
+      document.getElementById('stat-ng').innerText = stats.total_ng || 0;
+      document.getElementById('stat-rate').innerText = (stats.compliance_rate || 0).toFixed(1) + '%';
+    }
+
     function openMediaModal(type, src, title) {
       const modal = document.getElementById('media-modal');
       const body = document.getElementById('modal-body');
       document.getElementById('modal-title').innerText = title;
       
       if (type === 'video') {
-        body.innerHTML = `<video controls autoplay><source src="${src}" type="video/mp4">Your browser does not support video.</video>`;
+        body.innerHTML = `
+          <video controls autoplay playsinline preload="auto">
+            <source src="${src}" type="video/mp4">
+            <source src="${src}" type="video/x-m4v">
+            Your browser does not support HTML5 video. <a href="${src}" target="_blank" style="color: #58a6ff;">Download video</a>
+          </video>
+        `;
       } else {
-        body.innerHTML = `<img src="${src}" style="width: 100%; max-height: 450px; object-fit: contain; border-radius: 6px;" alt="Face Snap">`;
+        body.innerHTML = `<img src="${src}" style="width: 100%; max-height: 480px; object-fit: contain; border-radius: 6px;" alt="Face Snapshot">`;
       }
       modal.classList.add('active');
     }

@@ -200,6 +200,7 @@ class RoadCrossingSafetyChecker:
                         if person.step1_hold_count >= self.min_hold_frames:
                             person.step1_ok = True
                             person.step1_time = timestamp_sec
+                            self.alarm.play_step_ok(step_num=1)
                     else:
                         person.step1_hold_count = max(0, person.step1_hold_count - 1)
                         
@@ -210,6 +211,7 @@ class RoadCrossingSafetyChecker:
                         if person.step2_hold_count >= self.min_hold_frames:
                             person.step2_ok = True
                             person.step2_time = timestamp_sec
+                            self.alarm.play_step_ok(step_num=2)
                     else:
                         person.step2_hold_count = max(0, person.step2_hold_count - 1)
                         
@@ -222,6 +224,7 @@ class RoadCrossingSafetyChecker:
                             person.step3_time = timestamp_sec
                             person.total_ok = True
                             person.is_ng = False
+                            self.alarm.play_step_ok(step_num=3)
                     else:
                         person.step3_hold_count = max(0, person.step3_hold_count - 1)
                         

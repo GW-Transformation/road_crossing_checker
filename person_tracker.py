@@ -93,8 +93,20 @@ class TrackedPerson:
         out_filename = f"evidence_{self.event_uuid}_track_{self.track_id}.mp4"
         out_path = os.path.join(output_dir, out_filename)
         h, w, _ = self.evidence_buffer[0].shape
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        writer = cv2.VideoWriter(out_path, fourcc, fps, (w, h))
+        # Try H.264 avc1 for web browser compatibility, fallback to mp4v
+        writer = None
+        for codec in ['avc1', 'H264', 'mp4v']:
+            try:
+                fourcc = cv2.VideoWriter_fourcc(*codec)
+                w_test = cv2.VideoWriter(out_path, fourcc, fps, (w, h))
+                if w_test.isOpened():
+                    writer = w_test
+                    break
+            except Exception:
+                continue
+        if writer is None:
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            writer = cv2.VideoWriter(out_path, fourcc, fps, (w, h))
         for f in self.evidence_buffer:
             writer.write(f)
         writer.release()

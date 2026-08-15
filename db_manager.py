@@ -118,6 +118,47 @@ class CrossingDatabase:
             row = cursor.fetchone()
             return dict(row) if row else None
 
+    def delete_records(self, record_ids):
+        """Deletes selected records and their associated face and evidence files"""
+        if not record_ids:
+            return 0
+        deleted_count = 0
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            for rid in record_ids:
+                cursor.execute("SELECT face_image_path, evidence_video_path FROM crossing_records WHERE id = ?", (rid,))
+                row = cursor.fetchone()
+                if row:
+                    face_p, ev_p = row["face_image_path"], row["evidence_video_path"]
+                    if face_p and os.path.exists(face_p):
+                        try: os.remove(face_p)
+                        except Exception: pass
+                    if ev_p and os.path.exists(ev_p):
+                        try: os.remove(ev_p)
+                        except Exception: pass
+                    cursor.execute("DELETE FROM crossing_records WHERE id = ?", (rid,))
+                    deleted_count += 1
+            conn.commit()
+        return deleted_count
+
+    def clear_all_records(self):
+        """Clears all records and associated media files"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT face_image_path, evidence_video_path FROM crossing_records")
+            rows = cursor.fetchall()
+            for row in rows:
+                face_p, ev_p = row["face_image_path"], row["evidence_video_path"]
+                if face_p and os.path.exists(face_p):
+                    try: os.remove(face_p)
+                    except Exception: pass
+                if ev_p and os.path.exists(ev_p):
+                    try: os.remove(ev_p)
+                    except Exception: pass
+            cursor.execute("DELETE FROM crossing_records")
+            conn.commit()
+        return True
+
     def get_stats(self):
         with self.get_connection() as conn:
             cursor = conn.cursor()
