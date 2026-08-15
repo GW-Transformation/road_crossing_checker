@@ -14,15 +14,17 @@ from face_recognition_client import ExternalFaceRecognitionClient
 
 class RoadCrossingSafetyChecker:
     """
-    Pedestrian Road Crossing Standard Safety Checker
-    ================================================
-    Active People Panel (Face Avatar + Step 1, 2, 3 Status)
-    Delayed NG Alarm: Alarms ONLY when person leaves POI without completing 3 steps.
+    High-Performance Multi-Person Road Crossing Safety Standard Checker
+    ===================================================================
+    - Strict 1-to-1 Pose-to-Person Spatial Association (Zero Step Cross-Talk)
+    - Low-Latency Asynchronous Audio Engine (Chime on Step 1,2 + Level-Up on Step 3)
+    - Active People Screen Panel (Face Avatar + S1, S2, S3 Status)
+    - POI-Exit Delayed NG Alarm Judgment
     """
     def __init__(
         self,
         model_path=None,
-        min_hold_frames=6,
+        min_hold_frames=5,
         poi_config_path="poi_config.json",
         db_path="data/crossing_records.db",
         face_api_url=None,
@@ -41,7 +43,7 @@ class RoadCrossingSafetyChecker:
             min_pose_detection_confidence=0.35,
             min_pose_presence_confidence=0.35,
             min_tracking_confidence=0.35,
-            num_poses=2
+            num_poses=3 # Support simultaneous multi-person tracking
         )
         self.detector = vision.PoseLandmarker.create_from_options(options)
         self.min_hold_frames = min_hold_frames
@@ -74,11 +76,11 @@ class RoadCrossingSafetyChecker:
         ear_width = abs(l_ear.x - r_ear.x) + 1e-6
         head_yaw_ratio = (nose.x - ear_mid_x) / ear_width
         
-        if head_yaw_ratio < -0.40:
+        if head_yaw_ratio < -0.38:
             return "LEFT", head_yaw_ratio
-        elif head_yaw_ratio > 0.25:
+        elif head_yaw_ratio > 0.24:
             return "RIGHT", head_yaw_ratio
-        elif -0.38 <= head_yaw_ratio <= 0.22:
+        elif -0.36 <= head_yaw_ratio <= 0.22:
             return "FORWARD", head_yaw_ratio
         else:
             return "CENTER", head_yaw_ratio
@@ -109,7 +111,7 @@ class RoadCrossingSafetyChecker:
             return "LEFT", active_arm, (dx, dy, dz)
         elif dx > 0.12:
             return "RIGHT", active_arm, (dx, dy, dz)
-        elif abs(dx) <= 0.12 and dy < 0.20:
+        elif abs(dx) <= 0.12 and dy < 0.22:
             return "FORWARD", active_arm, (dx, dy, dz)
         else:
             return "UNKNOWN", active_arm, (dx, dy, dz)
@@ -155,7 +157,6 @@ class RoadCrossingSafetyChecker:
                 ys = [p.y for p in lm]
                 bw = max(xs) - min(xs)
                 bh = max(ys) - min(ys)
-                # Ignore noisy / tiny detections
                 if bh < 0.12 or bw < 0.05:
                     continue
                 bbox = (max(0.0, min(xs)), max(0.0, min(ys)), min(1.0, max(xs)), min(1.0, max(ys)))
@@ -165,22 +166,45 @@ class RoadCrossingSafetyChecker:
         tracked_persons = self.tracker.update(detected_bboxes, timestamp_sec)
         self.active_tracked_persons = tracked_persons
 
-        # Process active tracked persons
+        # Strict 1-to-1 Spatial Match between detected poses and tracked persons
+        # Compute cost matrix
+        assigned_poses = {} # person.track_id -> lm
+        if tracked_persons and detected_poses:
+            num_persons = len(tracked_persons)
+            num_poses = len(detected_poses)
+            cost_mat = np.zeros((num_persons, num_poses), dtype=np.float32)
+            
+            for p_idx, person in enumerate(tracked_persons):
+                for pose_idx, (lm, p_bbox) in enumerate(detected_poses):
+                    # Distance between person centroid and pose torso centroid
+                    p_cen = ((p_bbox[0]+p_bbox[2])/2.0, (p_bbox[1]+p_bbox[3])/2.0)
+                    dist = np.sqrt((p_cen[0]-person.centroid_norm[0])**2 + (p_cen[1]-person.centroid_norm[1])**2)
+                    cost_mat[p_idx, pose_idx] = dist
+                    
+            matched_p = set()
+            matched_pose = set()
+            flat_indices = np.argsort(cost_mat, axis=None)
+            
+            for idx in flat_indices:
+                p_idx = idx // num_poses
+                pose_idx = idx % num_poses
+                if p_idx in matched_p or pose_idx in matched_pose:
+                    continue
+                if cost_mat[p_idx, pose_idx] > 0.40:
+                    continue
+                matched_p.add(p_idx)
+                matched_pose.add(pose_idx)
+                assigned_poses[tracked_persons[p_idx].track_id] = detected_poses[pose_idx][0]
+
+        # Process each tracked person independently
         for person in tracked_persons:
             person.add_evidence_frame(frame)
             
-            # Find matching pose
-            matched_lm = None
-            for lm, p_bbox in detected_poses:
-                p_cen = ((p_bbox[0]+p_bbox[2])/2.0, (p_bbox[1]+p_bbox[3])/2.0)
-                if np.sqrt((p_cen[0]-person.centroid_norm[0])**2 + (p_cen[1]-person.centroid_norm[1])**2) < 0.25:
-                    matched_lm = lm
-                    break
-                    
             # Check POI containment
             in_poi = self.poi_manager.is_bbox_inside_or_intersect(person.bbox_norm)
             person.set_poi_state(in_poi)
 
+            matched_lm = assigned_poses.get(person.track_id)
             if matched_lm and person.active_monitor:
                 # Snap face image
                 face_crop, face_coords = self._extract_face_crop(frame, matched_lm)
@@ -200,7 +224,7 @@ class RoadCrossingSafetyChecker:
                         if person.step1_hold_count >= self.min_hold_frames:
                             person.step1_ok = True
                             person.step1_time = timestamp_sec
-                            self.alarm.play_step_ok(step_num=1)
+                            self.alarm.play_step_ok(step_num=1) # Crisp shot chime
                     else:
                         person.step1_hold_count = max(0, person.step1_hold_count - 1)
                         
@@ -211,7 +235,7 @@ class RoadCrossingSafetyChecker:
                         if person.step2_hold_count >= self.min_hold_frames:
                             person.step2_ok = True
                             person.step2_time = timestamp_sec
-                            self.alarm.play_step_ok(step_num=2)
+                            self.alarm.play_step_ok(step_num=2) # Crisp shot chime
                     else:
                         person.step2_hold_count = max(0, person.step2_hold_count - 1)
                         
@@ -224,7 +248,7 @@ class RoadCrossingSafetyChecker:
                             person.step3_time = timestamp_sec
                             person.total_ok = True
                             person.is_ng = False
-                            self.alarm.play_step_ok(step_num=3)
+                            self.alarm.play_step_ok(step_num=3) # Level-Up Victory Fanfare!
                     else:
                         person.step3_hold_count = max(0, person.step3_hold_count - 1)
                         
@@ -262,15 +286,9 @@ class RoadCrossingSafetyChecker:
         return annotated_frame, info
 
     def _judge_person_outcome(self, person, timestamp_sec):
-        """
-        Judge outcome when person leaves POI or exits view:
-        - If total_ok == True ➔ TOTAL OK (Logged to DB)
-        - If total_ok == False ➔ NG (Voice alarm plays, logged to DB, Face recognition queried)
-        """
         person.judged = True
         
         if person.total_ok:
-            # TOTAL OK
             face_path = person.save_face_image()
             evidence_path = person.save_evidence_video()
             record_data = {
@@ -290,19 +308,14 @@ class RoadCrossingSafetyChecker:
             person.db_logged = True
             print(f"\n[JUDGMENT: TOTAL OK] Person #{person.track_id} crossed with complete standard! Logged to DB (ID: {record_id})")
         else:
-            # NG - Person left POI without completing 3 steps!
             person.is_ng = True
-            
-            # 1. Trigger Voice Warning Alarm
             if not person.alarm_triggered:
                 self.alarm.play_alarm(reason="Left POI without completing 3 safety steps")
                 person.alarm_triggered = True
                 
-            # 2. Save Snapped Face & Evidence Video
             face_path = person.save_face_image()
             evidence_path = person.save_evidence_video()
             
-            # 3. Log to DB
             record_data = {
                 "event_uuid": person.event_uuid,
                 "track_id": person.track_id,
@@ -321,34 +334,25 @@ class RoadCrossingSafetyChecker:
             self.last_ng_event = record_data
             print(f"\n[JUDGMENT: NG ALERT] 🚨 Person #{person.track_id} left POI without standard! Voice alarm played. Logged to DB (ID: {record_id})")
             
-            # 4. External Face Recognition
             if person.best_face_image is not None:
                 self.face_client.recognize_face_async(person.best_face_image, record_id, metadata=record_data)
 
     def _draw_active_people_panel(self, frame, tracked_persons):
-        """
-        Draws active people side panel on the screen:
-        Shows only Face thumbnail and Status of Step 1, 2, 3 for each active person.
-        """
         h, w, _ = frame.shape
-        
-        # Panel Dimensions
         panel_w = 260
         panel_x = w - panel_w - 10
         panel_y = 10
         
         active_list = [p for p in tracked_persons if p.active_monitor or p.entered_poi_once]
         if not active_list:
-            # Draw idle banner
             overlay = frame.copy()
-            cv2.rectangle(overlay, (panel_x, panel_y), (w - 10, panel_y + 40), (20, 20, 26), -1)
+            cv2.rectangle(overlay, (panel_x, panel_y), (w - 10, panel_y + 36), (20, 20, 26), -1)
             cv2.addWeighted(overlay, 0.80, frame, 0.20, 0, frame)
-            cv2.rectangle(frame, (panel_x, panel_y), (w - 10, panel_y + 40), (60, 60, 70), 1)
-            cv2.putText(frame, "ACTIVE MONITOR: IDLE", (panel_x + 12, panel_y + 25),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.42, (180, 180, 180), 1, cv2.LINE_AA)
+            cv2.rectangle(frame, (panel_x, panel_y), (w - 10, panel_y + 36), (60, 60, 70), 1)
+            cv2.putText(frame, "ACTIVE MONITOR: IDLE", (panel_x + 12, panel_y + 23),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.40, (180, 180, 180), 1, cv2.LINE_AA)
             return frame
 
-        # Render panel container
         card_h = 75
         total_panel_h = min(h - 20, len(active_list) * (card_h + 8) + 36)
         
@@ -357,7 +361,6 @@ class RoadCrossingSafetyChecker:
         cv2.addWeighted(overlay, 0.88, frame, 0.12, 0, frame)
         cv2.rectangle(frame, (panel_x, panel_y), (w - 10, panel_y + total_panel_h), (0, 200, 255), 1)
         
-        # Header
         cv2.putText(frame, f"ACTIVE PEOPLE IN POI ({len(active_list)})", (panel_x + 10, panel_y + 20),
                     cv2.FONT_HERSHEY_DUPLEX, 0.42, (0, 220, 255), 1, cv2.LINE_AA)
 
@@ -366,12 +369,10 @@ class RoadCrossingSafetyChecker:
             if curr_y + card_h > h - 10:
                 break
                 
-            # Card background
             card_bg = (30, 34, 46)
             cv2.rectangle(frame, (panel_x + 6, curr_y), (w - 16, curr_y + card_h), card_bg, -1)
             cv2.rectangle(frame, (panel_x + 6, curr_y), (w - 16, curr_y + card_h), (50, 60, 80), 1)
             
-            # 1. Face Avatar / Thumbnail
             face_size = 54
             face_x = panel_x + 12
             face_y = curr_y + 10
@@ -389,28 +390,23 @@ class RoadCrossingSafetyChecker:
                             
             cv2.rectangle(frame, (face_x, face_y), (face_x+face_size, face_y+face_size), (0, 200, 255), 1)
 
-            # 2. Person Title & Overall Badge
             info_x = face_x + face_size + 10
             cv2.putText(frame, f"Person #{person.track_id}", (info_x, curr_y + 18),
                         cv2.FONT_HERSHEY_DUPLEX, 0.44, (255, 255, 255), 1, cv2.LINE_AA)
                         
-            # 3. Step 1, Step 2, Step 3 Badges
-            # Step 1
+            # Step indicators
             s1_col = (0, 240, 0) if person.step1_ok else ((0, 0, 255) if person.is_ng else (140, 140, 140))
             s1_txt = "S1:OK" if person.step1_ok else "S1:--"
             cv2.putText(frame, s1_txt, (info_x, curr_y + 36), cv2.FONT_HERSHEY_SIMPLEX, 0.38, s1_col, 1, cv2.LINE_AA)
             
-            # Step 2
             s2_col = (0, 240, 0) if person.step2_ok else ((0, 0, 255) if person.is_ng else (140, 140, 140))
             s2_txt = "S2:OK" if person.step2_ok else "S2:--"
             cv2.putText(frame, s2_txt, (info_x + 56, curr_y + 36), cv2.FONT_HERSHEY_SIMPLEX, 0.38, s2_col, 1, cv2.LINE_AA)
             
-            # Step 3
             s3_col = (0, 240, 0) if person.step3_ok else ((0, 0, 255) if person.is_ng else (140, 140, 140))
             s3_txt = "S3:OK" if person.step3_ok else "S3:--"
             cv2.putText(frame, s3_txt, (info_x + 112, curr_y + 36), cv2.FONT_HERSHEY_SIMPLEX, 0.38, s3_col, 1, cv2.LINE_AA)
             
-            # Overall Status Label
             if person.total_ok:
                 status_str = "STATUS: TOTAL OK (SAFE)"
                 st_color = (0, 255, 120)
@@ -429,7 +425,6 @@ class RoadCrossingSafetyChecker:
         return frame
 
     def generate_final_report(self):
-        # Trigger judgment on any active persons before session wrapup
         now = time.time()
         for p in self.tracker.tracked_persons.values():
             if p.entered_poi_once and not p.judged:

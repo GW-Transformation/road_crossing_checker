@@ -7,8 +7,7 @@ from collections import deque
 
 class TrackedPerson:
     """
-    State container for an individual person in camera view.
-    Tracks POI presence, safety checklist, face snapshot, and evidence video buffer.
+    Independent state container for an individual tracked person.
     """
     def __init__(self, track_id, bbox_norm, entry_time=None):
         self.track_id = track_id
@@ -23,7 +22,7 @@ class TrackedPerson:
         self.entered_poi_once = False
         self.frames_in_poi = 0
         self.exited_poi = False
-        self.active_monitor = False # True when in POI
+        self.active_monitor = False
         
         # 3-Step Safety Standards
         self.step1_ok = False
@@ -31,7 +30,7 @@ class TrackedPerson:
         self.step3_ok = False
         self.total_ok = False
         self.is_ng = False
-        self.judged = False # True once judged as OK or NG
+        self.judged = False
         
         self.step1_hold_count = 0
         self.step2_hold_count = 0
@@ -40,6 +39,10 @@ class TrackedPerson:
         self.step1_time = None
         self.step2_time = None
         self.step3_time = None
+        
+        # Exponential moving averages for smooth landmark tracking
+        self.smooth_yaw = 0.0
+        self.smooth_arm_dx = 0.0
         
         # Quality Face Crop
         self.best_face_image = None
@@ -53,12 +56,15 @@ class TrackedPerson:
         self.db_logged = False
         self.event_uuid = str(uuid.uuid4())[:8]
         
-        # Trajectory
         self.trajectory = []
 
     def update_position(self, bbox_norm, current_time):
         self.bbox_norm = bbox_norm
-        self.centroid_norm = ((bbox_norm[0] + bbox_norm[2])/2.0, (bbox_norm[1] + bbox_norm[3])/2.0)
+        cx = (bbox_norm[0] + bbox_norm[2]) / 2.0
+        cy = (bbox_norm[1] + bbox_norm[3]) / 2.0
+        
+        # Smooth centroid update
+        self.centroid_norm = (0.7 * self.centroid_norm[0] + 0.3 * cx, 0.7 * self.centroid_norm[1] + 0.3 * cy)
         self.last_seen_time = current_time
         self.trajectory.append((self.centroid_norm[0], self.centroid_norm[1], current_time))
         if len(self.trajectory) > 60:
@@ -75,7 +81,6 @@ class TrackedPerson:
             self.active_monitor = True
         else:
             if self.previously_in_poi and self.entered_poi_once:
-                # Person just stepped out of the POI zone
                 self.exited_poi = True
 
     def update_face(self, face_crop, score=1.0):
@@ -93,7 +98,7 @@ class TrackedPerson:
         out_filename = f"evidence_{self.event_uuid}_track_{self.track_id}.mp4"
         out_path = os.path.join(output_dir, out_filename)
         h, w, _ = self.evidence_buffer[0].shape
-        # Try H.264 avc1 for web browser compatibility, fallback to mp4v
+        
         writer = None
         for codec in ['avc1', 'H264', 'mp4v']:
             try:
@@ -123,13 +128,14 @@ class TrackedPerson:
 
 class SimpleMultiPersonTracker:
     """
-    Lightweight Centroid & IOU based tracker for embedded platforms.
+    Robust 1-to-1 Spatial Multi-Person Tracker with Hungarian/Global Minimum Matching.
+    Prevents track cross-talk or mistaken step updates when multiple people are in frame.
     """
-    def __init__(self, max_disappeared_sec=2.5, iou_dist_threshold=0.55):
+    def __init__(self, max_disappeared_sec=2.0, max_dist_threshold=0.45):
         self.next_track_id = 1
         self.tracked_persons = {} # track_id -> TrackedPerson
         self.max_disappeared_sec = max_disappeared_sec
-        self.iou_dist_threshold = iou_dist_threshold
+        self.max_dist_threshold = max_dist_threshold
         self.recently_removed_persons = []
 
     def update(self, detected_bboxes_norm, current_time):
@@ -156,32 +162,46 @@ class SimpleMultiPersonTracker:
         track_centroids = [self.tracked_persons[tid].centroid_norm for tid in track_ids]
         det_centroids = [((b[0]+b[2])/2.0, (b[1]+b[3])/2.0) for b in detected_bboxes_norm]
 
+        # Build full distance matrix
+        num_tracks = len(track_ids)
+        num_dets = len(detected_bboxes_norm)
+        cost_matrix = np.zeros((num_tracks, num_dets), dtype=np.float32)
+        
+        for t_idx, t_cen in enumerate(track_centroids):
+            for d_idx, d_cen in enumerate(det_centroids):
+                # Combined distance + size differential penalty
+                dx = t_cen[0] - d_cen[0]
+                dy = t_cen[1] - d_cen[1]
+                dist = np.sqrt(dx*dx + dy*dy)
+                cost_matrix[t_idx, d_idx] = dist
+
+        # Strict 1-to-1 Global Greedy Minimum Assignment
         matched_tracks = set()
         matched_dets = set()
+        
+        flat_indices = np.argsort(cost_matrix, axis=None)
+        for idx in flat_indices:
+            t_idx = idx // num_dets
+            d_idx = idx % num_dets
+            
+            if t_idx in matched_tracks or d_idx in matched_dets:
+                continue
+            if cost_matrix[t_idx, d_idx] > self.max_dist_threshold:
+                continue
+                
+            matched_tracks.add(t_idx)
+            matched_dets.add(d_idx)
+            tid = track_ids[t_idx]
+            self.tracked_persons[tid].update_position(detected_bboxes_norm[d_idx], current_time)
 
-        for d_idx, d_cen in enumerate(det_centroids):
-            best_t_idx = -1
-            min_dist = float("inf")
-            for t_idx, t_cen in enumerate(track_centroids):
-                if t_idx in matched_tracks:
-                    continue
-                dist = np.sqrt((d_cen[0] - t_cen[0])**2 + (d_cen[1] - t_cen[1])**2)
-                if dist < min_dist and dist < self.iou_dist_threshold:
-                    min_dist = dist
-                    best_t_idx = t_idx
-                    
-            if best_t_idx != -1:
-                matched_tracks.add(best_t_idx)
-                matched_dets.add(d_idx)
-                tid = track_ids[best_t_idx]
-                self.tracked_persons[tid].update_position(detected_bboxes_norm[d_idx], current_time)
-
+        # Unmatched detections -> new track IDs
         for d_idx, bbox in enumerate(detected_bboxes_norm):
             if d_idx not in matched_dets:
                 person = TrackedPerson(self.next_track_id, bbox, entry_time=current_time)
                 self.tracked_persons[self.next_track_id] = person
                 self.next_track_id += 1
 
+        # Remove timed-out tracks
         removed_ids = []
         for tid, person in self.tracked_persons.items():
             if (current_time - person.last_seen_time) > self.max_disappeared_sec:
