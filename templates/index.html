@@ -201,15 +201,20 @@
 
         <div class="card">
           <div class="card-header">
-            <span class="card-title">🎯 Point of Interest (POI)</span>
+            <span class="card-title">🎯 Point of Interest (POI) Config</span>
+            <div style="display: flex; gap: 6px;">
+              <button class="btn btn-play" style="font-size: 11px; padding: 4px 8px;" onclick="saveWebPoi()">💾 Save</button>
+              <button class="btn" style="font-size: 11px; padding: 4px 8px;" onclick="resetWebPoi()">🔄 Reset</button>
+            </div>
           </div>
-          <div style="height: 180px; background: #000; border-radius: 6px; overflow: hidden; position: relative; border: 1px dashed var(--accent);">
-            <svg width="100%" height="100%" viewBox="0 0 100 100" preserveAspectRatio="none">
-              <polygon id="poi-svg" points="" fill="rgba(88, 166, 255, 0.2)" stroke="#58a6ff" stroke-width="1.5" />
+          <div style="height: 200px; background: #0b0e14; border-radius: 6px; position: relative; border: 1px dashed var(--accent); user-select: none;">
+            <svg id="poi-editor-svg" width="100%" height="100%" viewBox="0 0 100 100" preserveAspectRatio="none" style="cursor: crosshair;">
+              <polygon id="poi-svg" points="" fill="rgba(88, 166, 255, 0.22)" stroke="#58a6ff" stroke-width="1.8" />
+              <g id="poi-handles"></g>
             </svg>
           </div>
-          <p style="font-size: 12px; color: var(--muted); margin-top: 10px;">
-            Designated safety corridor for crossing verification.
+          <p id="poi-status-msg" style="font-size: 12px; color: var(--muted); margin-top: 10px;">
+            Drag vertices on screen to reshape safety crossing corridor.
           </p>
         </div>
       </div>
@@ -226,11 +231,79 @@
   </div>
 
   <script>
-    const poly = {{ poi_poly|tojson }};
-    if (poly && poly.length) {
+    let poly = {{ poi_poly|tojson }} || [
+      {x: 0.05, y: 0.05}, {x: 0.95, y: 0.05}, {x: 0.95, y: 0.95}, {x: 0.05, y: 0.95}
+    ];
+    let draggedHandleIdx = -1;
+
+    function renderPoiSvg() {
+      if (!poly || !poly.length) return;
       const pts = poly.map(p => `${p.x * 100},${p.y * 100}`).join(' ');
       document.getElementById('poi-svg').setAttribute('points', pts);
+
+      const handlesGroup = document.getElementById('poi-handles');
+      handlesGroup.innerHTML = '';
+      poly.forEach((p, idx) => {
+        const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        circle.setAttribute('cx', p.x * 100);
+        circle.setAttribute('cy', p.y * 100);
+        circle.setAttribute('r', 4.5);
+        circle.setAttribute('fill', '#00e5ff');
+        circle.setAttribute('stroke', '#ffffff');
+        circle.setAttribute('stroke-width', '1.2');
+        circle.setAttribute('style', 'cursor: grab;');
+        circle.setAttribute('data-idx', idx);
+
+        circle.addEventListener('mousedown', (e) => {
+          draggedHandleIdx = idx;
+          e.stopPropagation();
+        });
+        handlesGroup.appendChild(circle);
+      });
     }
+
+    const svgEl = document.getElementById('poi-editor-svg');
+    svgEl.addEventListener('mousemove', (e) => {
+      if (draggedHandleIdx === -1) return;
+      const rect = svgEl.getBoundingClientRect();
+      const normX = Math.max(0.0, Math.min(1.0, (e.clientX - rect.left) / rect.width));
+      const normY = Math.max(0.0, Math.min(1.0, (e.clientY - rect.top) / rect.height));
+      poly[draggedHandleIdx] = { x: parseFloat(normX.toFixed(4)), y: parseFloat(normY.toFixed(4)) };
+      renderPoiSvg();
+    });
+
+    window.addEventListener('mouseup', () => {
+      draggedHandleIdx = -1;
+    });
+
+    function saveWebPoi() {
+      const msg = document.getElementById('poi-status-msg');
+      msg.innerHTML = '<span style="color: var(--accent);">Saving POI configuration...</span>';
+      fetch('/api/poi', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ poi_polygon: poly })
+      })
+      .then(res => res.json())
+      .then(data => {
+        if (data.success) {
+          msg.innerHTML = '<span style="color: var(--success);">✅ POI saved & updated in real-time!</span>';
+          setTimeout(() => {
+            msg.innerHTML = 'Drag vertices on screen to reshape safety crossing corridor.';
+          }, 3000);
+        }
+      });
+    }
+
+    function resetWebPoi() {
+      poly = [
+        {x: 0.05, y: 0.05}, {x: 0.95, y: 0.05}, {x: 0.95, y: 0.95}, {x: 0.05, y: 0.95}
+      ];
+      renderPoiSvg();
+      saveWebPoi();
+    }
+
+    renderPoiSvg();
 
     function toggleSelectAll(master) {
       const checks = document.querySelectorAll('.row-check');

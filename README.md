@@ -15,7 +15,8 @@ An embedded-ready AI computer vision and safety enforcement system designed to v
 ---
 
 ## 🚀 Key Features
-- **Point of Interest (POI) Corridor:** Define safety crossing zones via polygon coordinates (`poi_config.json`).
+- **Interactive On-Screen POI Editor:** Edit safety crossing zones directly in the live OpenCV window by dragging vertex handles (`P1-P4`), or via the Web Dashboard interactive SVG editor (`poi_config.json`).
+- **Full Head & Face Portrait Capture:** Captures high-res face portrait evidence showing full head, hair, ears, chin, and neck down to shoulders.
 - **Active Face & Person Monitoring:** Activates tracking and monitoring when a person/face enters the POI.
 - **Multi-Person Tracking:** Tracks individual pedestrians with separate safety checklists.
 - **🔊 Voice Alarm Warning:** Plays *"กรุณาหยุด ชี้นิ้วตามทางแยกให้ถูกต้อง"* in real-time upon violation.
@@ -24,6 +25,15 @@ An embedded-ready AI computer vision and safety enforcement system designed to v
 - **💾 SQLite Database Logging:** Full audit log of all events, timestamps, face paths, and video recordings.
 - **🖥️ Web Incident Dashboard & REST API:** Built-in web dashboard (`http://localhost:5000`) with video playback and record retrieval.
 - **⚡ Embedded Ready:** Optimized for Raspberry Pi 4 / 5 and low-spec hardware using lightweight MediaPipe Pose.
+
+---
+
+## 🎮 GUI & POI Editor Controls (On-Screen Window)
+- **`[E]` Key:** Toggle **POI Edit Mode** on/off.
+- **Left-Click & Drag:** Click and drag any POI vertex handle (`P1`, `P2`, `P3`, `P4`) to reshape the safety zone in real-time.
+- **`[S]` Key:** **Save POI configuration** immediately to disk (`poi_config.json`) with on-screen visual confirmation.
+- **`[R]` Key:** **Reset POI** to default rectangular safety crossing corridor.
+- **`[Q]` / `[ESC]` Key:** Exit / Quit.
 
 ---
 

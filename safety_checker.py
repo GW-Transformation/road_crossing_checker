@@ -66,6 +66,11 @@ class RoadCrossingSafetyChecker:
         self.active_tracked_persons = []
         self.last_ng_event = None
         self.last_live_feedback = ""
+        
+        # Interactive On-Screen POI Editor state
+        self.poi_edit_mode = False
+        self.selected_poi_vertex = -1
+        self.poi_save_toast_time = 0.0
 
     def _on_face_matched(self, record_id, result):
         if result and result.get("matched"):
@@ -162,45 +167,50 @@ class RoadCrossingSafetyChecker:
 
     def _extract_face_crop(self, frame, lm):
         """
-        Clean Face Crop Extraction:
-        Strictly bounds the face from forehead to chin, stopping above the shoulder line.
-        Prevents hands, arms, or chest from appearing in the dashboard face snapshot.
+        Full Face & Head Portrait Crop Extraction:
+        Captures the complete head, full hair, ears, face, chin, and neck down to the shoulders.
         """
         h, w, _ = frame.shape
         
-        # Key head landmarks
+        # Key landmarks
         nose = lm[0]
         l_ear, r_ear = lm[7], lm[8]
         l_eye, r_eye = lm[2], lm[5]
         l_sh, r_sh = lm[11], lm[12]
         
-        # Shoulder line (upper chest boundary)
-        sh_y = min(l_sh.y, r_sh.y)
+        # Shoulder line (upper body anchor)
+        sh_y = (l_sh.y + r_sh.y) / 2.0
         
-        # Horizontal head center and width
-        head_cx = nose.x
-        ear_dist = abs(l_ear.x - r_ear.x)
-        head_w = max(0.12, max(ear_dist * 1.5, 0.10))
+        # Head center
+        head_cx = (nose.x + (l_ear.x + r_ear.x) / 2.0) / 2.0
+        ear_dist = max(abs(l_ear.x - r_ear.x), 0.05)
         
-        # Vertical head bounds: top of forehead down to chin (above shoulder)
-        head_h = max(0.14, abs(sh_y - nose.y) * 1.6)
+        # Head width including ears and full hair width
+        head_w = max(0.18, ear_dist * 2.2)
+        
+        # Distance from nose to shoulder provides natural vertical head+neck scale
+        nose_to_sh = max(abs(sh_y - nose.y), 0.08)
+        
+        # Top of hair: extend well above eyes/nose to include full hairstyle/hair
+        top_hair_y = nose.y - max(nose_to_sh * 1.05, ear_dist * 1.15, 0.12)
+        
+        # Bottom of neck / collar: reach down to top of shoulder/clavicle
+        neck_bottom_y = min(sh_y + 0.035, nose.y + max(nose_to_sh * 1.15, 0.14))
         
         min_x = max(0.0, head_cx - head_w / 2.0)
         max_x = min(1.0, head_cx + head_w / 2.0)
+        min_y = max(0.0, top_hair_y)
+        max_y = min(1.0, neck_bottom_y)
         
-        min_y = max(0.0, nose.y - (head_h * 0.55))
-        # Strictly clamp bottom to chin above shoulder line so raised hands/chest are never included
-        max_y = min(1.0, min(sh_y - 0.015, nose.y + (head_h * 0.45)))
-        
-        if max_y <= min_y + 0.05:
-            max_y = min(1.0, min_y + 0.12)
+        if max_y <= min_y + 0.08:
+            max_y = min(1.0, min_y + 0.18)
             
         x1 = max(0, int(min_x * w))
         y1 = max(0, int(min_y * h))
         x2 = min(w, int(max_x * w))
         y2 = min(h, int(max_y * h))
         
-        if (x2 - x1) > 20 and (y2 - y1) > 20:
+        if (x2 - x1) > 25 and (y2 - y1) > 25:
             face_crop = frame[y1:y2, x1:x2].copy()
             return face_crop, (x1, y1, x2, y2)
         return None, (0, 0, 0, 0)
@@ -286,6 +296,8 @@ class RoadCrossingSafetyChecker:
                 pointing_dirs = self._classify_arm_pointing_dirs(matched_lm)
                 
                 point_str = "/".join(pointing_dirs) if pointing_dirs else "NONE"
+                person.last_head_look = head_look
+                person.last_point_dir = point_str
                 self.last_live_feedback = f"Head: {head_look:<5} | Point: {point_str:<6}"
                 
                 if head_look in pointing_dirs:
@@ -348,12 +360,33 @@ class RoadCrossingSafetyChecker:
                         track_id=person.track_id
                     )
 
-        # 3. Draw POI Overlay (Active when verified person is in POI)
+        # 3. Draw POI Overlay (Active when verified person is in POI, or in edit mode)
         poi_active = any(p.in_poi for p in tracked_persons if p.is_verified)
-        frame = self.poi_manager.draw_poi_overlay(frame, active=poi_active)
+        frame = self.poi_manager.draw_poi_overlay(
+            frame,
+            active=poi_active,
+            edit_mode=self.poi_edit_mode,
+            selected_vertex_idx=self.selected_poi_vertex
+        )
         
         # 4. Draw Active People Panel (Shows verified persons only)
         annotated_frame = self._draw_large_hud_panel(frame, tracked_persons)
+        
+        # Draw on-screen banner for POI Edit Mode
+        if self.poi_edit_mode:
+            cv2.rectangle(annotated_frame, (0, 0), (w, 36), (15, 20, 30), -1)
+            cv2.line(annotated_frame, (0, 36), (w, 36), (0, 200, 255), 2)
+            cv2.putText(annotated_frame, "POI EDIT MODE: Drag handles P1-P4 | [S] Save | [R] Reset | [E] Exit Edit",
+                        (14, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.46, (0, 230, 255), 1, cv2.LINE_AA)
+        
+        # Draw green toast notification when saved/reset
+        if time.time() - self.poi_save_toast_time < 2.5:
+            toast_w, toast_h = 330, 36
+            tx1, ty1 = max(10, (w - toast_w) // 2), 44
+            cv2.rectangle(annotated_frame, (tx1, ty1), (tx1 + toast_w, ty1 + toast_h), (20, 35, 20), -1)
+            cv2.rectangle(annotated_frame, (tx1, ty1), (tx1 + toast_w, ty1 + toast_h), (0, 255, 120), 2)
+            cv2.putText(annotated_frame, "POI CONFIG SAVED TO DISK!",
+                        (tx1 + 16, ty1 + 24), cv2.FONT_HERSHEY_DUPLEX, 0.48, (0, 255, 120), 1, cv2.LINE_AA)
         
         # 5. Store Annotated Frame into Evidence Buffers
         for person in tracked_persons:
@@ -361,9 +394,16 @@ class RoadCrossingSafetyChecker:
                 person.add_evidence_frame(annotated_frame)
 
         verified_persons = [p for p in tracked_persons if p.is_verified]
+        p1 = verified_persons[0] if verified_persons else None
         info = {
             "timestamp": timestamp_sec,
             "tracked_count": len(verified_persons),
+            "head_look": getattr(p1, "last_head_look", "UNKNOWN") if p1 else "UNKNOWN",
+            "point_dir": getattr(p1, "last_point_dir", "NONE") if p1 else "NONE",
+            "step1_ok": bool(p1 and (p1.checked_left or p1.checked_right)),
+            "step2_ok": bool(p1 and (p1.checked_left and p1.checked_right)),
+            "step3_ok": bool(p1 and p1.checked_front),
+            "total_ok": bool(p1 and p1.total_ok),
             "persons": [
                 {
                     "track_id": p.track_id,
@@ -608,6 +648,12 @@ class RoadCrossingSafetyChecker:
             "step1_side1": "OK" if (p1 and (p1.checked_left or p1.checked_right)) else "NG",
             "step2_side2": "OK" if (p1 and (p1.checked_left and p1.checked_right)) else "NG",
             "step3_front": "OK" if (p1 and p1.checked_front) else "NG",
+            "step1_look_point_left": "OK" if (p1 and p1.checked_left) else "NG",
+            "step2_look_point_right": "OK" if (p1 and p1.checked_right) else "NG",
+            "step3_look_point_forward": "OK" if (p1 and p1.checked_front) else "NG",
+            "step1_timestamp": getattr(p1, "step1_timestamp", 0.0) if p1 else 0.0,
+            "step2_timestamp": getattr(p1, "step2_timestamp", 0.0) if p1 else 0.0,
+            "step3_timestamp": getattr(p1, "step3_timestamp", 0.0) if p1 else 0.0,
             "total_result": "TOTAL OK" if all_passed else "TOTAL NG",
             "is_standard_compliant": all_passed,
             "persons": persons_report

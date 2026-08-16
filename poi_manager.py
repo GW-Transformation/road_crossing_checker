@@ -82,24 +82,92 @@ class POIManager:
         # Check center and bottom center (pedestrian foot location)
         return self.is_point_inside(cx, cy) or self.is_point_inside(cx, y2)
 
-    def draw_poi_overlay(self, frame, active=False):
-        """Draws POI boundary with neon accent and label"""
+    def find_nearest_vertex(self, px, py, frame_w, frame_h, max_dist_px=25):
+        """Finds index of nearest vertex within threshold, returns -1 if none"""
+        best_idx = -1
+        best_dist = max_dist_px
+        for i, p in enumerate(self.polygon):
+            vx = int(p["x"] * frame_w)
+            vy = int(p["y"] * frame_h)
+            dist = np.sqrt((px - vx)**2 + (py - vy)**2)
+            if dist < best_dist:
+                best_dist = dist
+                best_idx = i
+        return best_idx
+
+    def update_vertex(self, idx, px, py, frame_w, frame_h):
+        """Updates vertex position using pixel coordinates, clamped to 0..1"""
+        if 0 <= idx < len(self.polygon):
+            norm_x = max(0.0, min(1.0, float(px) / float(frame_w)))
+            norm_y = max(0.0, min(1.0, float(py) / float(frame_h)))
+            self.polygon[idx] = {"x": round(norm_x, 4), "y": round(norm_y, 4)}
+
+    def add_vertex(self, px, py, frame_w, frame_h):
+        """Adds a new vertex at normalized position"""
+        norm_x = max(0.0, min(1.0, float(px) / float(frame_w)))
+        norm_y = max(0.0, min(1.0, float(py) / float(frame_h)))
+        self.polygon.append({"x": round(norm_x, 4), "y": round(norm_y, 4)})
+
+    def remove_last_vertex(self):
+        """Removes the last vertex if more than 3 remain"""
+        if len(self.polygon) > 3:
+            self.polygon.pop()
+
+    def reset_to_default(self):
+        """Resets POI zone to default corridor box"""
+        self.polygon = [
+            {"x": 0.05, "y": 0.05},
+            {"x": 0.95, "y": 0.05},
+            {"x": 0.95, "y": 0.95},
+            {"x": 0.05, "y": 0.95}
+        ]
+        self.save_config()
+
+    def draw_poi_overlay(self, frame, active=False, edit_mode=False, selected_vertex_idx=-1):
+        """Draws POI boundary with neon accent, labels, and interactive edit handles"""
         h, w, _ = frame.shape
         pts = self.get_pixel_polygon(w, h)
         if len(pts) < 3:
             return frame
             
         overlay = frame.copy()
-        fill_color = (0, 100, 255) if active else (50, 150, 50)
-        border_color = (0, 200, 255) if active else (0, 255, 120)
+        if edit_mode:
+            fill_color = (180, 100, 20)
+            border_color = (0, 220, 255)
+            alpha = 0.20
+        else:
+            fill_color = (0, 100, 255) if active else (50, 150, 50)
+            border_color = (0, 200, 255) if active else (0, 255, 120)
+            alpha = 0.12 if not active else 0.22
         
         cv2.fillPoly(overlay, [pts], fill_color)
-        alpha = 0.12 if not active else 0.22
         cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
-        cv2.polylines(frame, [pts], isClosed=True, color=border_color, thickness=2, lineType=cv2.LINE_AA)
+        cv2.polylines(frame, [pts], isClosed=True, color=border_color, thickness=2 if not edit_mode else 3, lineType=cv2.LINE_AA)
         
         # POI Label at first point
-        label_x, label_y = pts[0][0] + 8, pts[0][1] + 20
-        cv2.putText(frame, "POI: ACTIVE SAFETY ZONE" if active else "POI: ROAD CROSSING ZONE", 
-                    (label_x, label_y), cv2.FONT_HERSHEY_SIMPLEX, 0.45, border_color, 1, cv2.LINE_AA)
+        label_x, label_y = max(10, min(w - 240, pts[0][0] + 8)), max(25, pts[0][1] + 20)
+        if edit_mode:
+            cv2.putText(frame, "POI: [EDIT MODE - DRAG HANDLES]", 
+                        (label_x, label_y), cv2.FONT_HERSHEY_DUPLEX, 0.48, (0, 240, 255), 1, cv2.LINE_AA)
+        else:
+            cv2.putText(frame, "POI: ACTIVE SAFETY ZONE" if active else "POI: ROAD CROSSING ZONE", 
+                        (label_x, label_y), cv2.FONT_HERSHEY_SIMPLEX, 0.45, border_color, 1, cv2.LINE_AA)
+        
+        # Draw interactive vertex handles in Edit Mode
+        if edit_mode:
+            for idx, pt in enumerate(pts):
+                is_selected = (idx == selected_vertex_idx)
+                handle_color = (0, 255, 255) if is_selected else (0, 180, 255)
+                center_color = (255, 255, 255) if is_selected else (40, 40, 40)
+                radius = 11 if is_selected else 8
+                
+                # Outer glow and ring
+                cv2.circle(frame, (pt[0], pt[1]), radius + 3, (0, 0, 0), -1)
+                cv2.circle(frame, (pt[0], pt[1]), radius, handle_color, -1)
+                cv2.circle(frame, (pt[0], pt[1]), radius - 3, center_color, -1)
+                
+                # Vertex numbering
+                cv2.putText(frame, f"P{idx+1}", (pt[0] + 12, pt[1] + 5),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
+                            
         return frame

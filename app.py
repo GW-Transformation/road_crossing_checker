@@ -167,7 +167,35 @@ def main():
 
     frame_count = 0
     t0 = time.time()
-    print("[*] System active. Monitoring Point of Interest (POI). Press 'q' in window to exit.")
+    print("[*] System active. Monitoring Point of Interest (POI).")
+    print("[*] GUI Controls: [E] Toggle POI Edit Mode | [Mouse Drag] Move POI Points | [S] Save POI | [R] Reset | [Q] Quit")
+
+    win_name = "Road Crossing Safety Standard Monitor"
+    dragging_idx = [-1]
+    mouse_param = {"w": width, "h": height}
+    
+    if not args.headless:
+        cv2.namedWindow(win_name, cv2.WINDOW_NORMAL)
+        
+        def on_mouse(event, x, y, flags, param):
+            cur_w, cur_h = param["w"], param["h"]
+            if event == cv2.EVENT_LBUTTONDOWN:
+                nearest = checker.poi_manager.find_nearest_vertex(x, y, cur_w, cur_h, max_dist_px=30)
+                if nearest != -1:
+                    dragging_idx[0] = nearest
+                    checker.selected_poi_vertex = nearest
+                    checker.poi_edit_mode = True
+            elif event == cv2.EVENT_MOUSEMOVE:
+                if dragging_idx[0] != -1:
+                    checker.poi_manager.update_vertex(dragging_idx[0], x, y, cur_w, cur_h)
+                    checker.selected_poi_vertex = dragging_idx[0]
+            elif event == cv2.EVENT_LBUTTONUP:
+                if dragging_idx[0] != -1:
+                    checker.poi_manager.update_vertex(dragging_idx[0], x, y, cur_w, cur_h)
+                    dragging_idx[0] = -1
+                    checker.selected_poi_vertex = -1
+                    
+        cv2.setMouseCallback(win_name, on_mouse, mouse_param)
 
     try:
         while True:
@@ -192,13 +220,26 @@ def main():
             if out_writer is not None:
                 out_writer.write(annotated_frame)
 
-            # Display GUI window
+            # Display GUI window with interactive mouse and keyboard handling
             if not args.headless:
-                cv2.imshow("Road Crossing Safety Standard Monitor", annotated_frame)
+                mouse_param["w"] = annotated_frame.shape[1]
+                mouse_param["h"] = annotated_frame.shape[0]
+                cv2.imshow(win_name, annotated_frame)
                 key = cv2.waitKey(1) & 0xFF
-                if key == ord('q'):
+                if key == ord('q') or key == 27:
                     print("[INFO] Quit requested by user.")
                     break
+                elif key == ord('e'):
+                    checker.poi_edit_mode = not checker.poi_edit_mode
+                    print(f"[*] POI Edit Mode: {'ON (Drag handles on screen to reshape)' if checker.poi_edit_mode else 'OFF'}")
+                elif key == ord('s'):
+                    checker.poi_manager.save_config()
+                    checker.poi_save_toast_time = time.time()
+                    print("[*] POI configuration successfully saved to poi_config.json!")
+                elif key == ord('r'):
+                    checker.poi_manager.reset_to_default()
+                    checker.poi_save_toast_time = time.time()
+                    print("[*] POI configuration reset to default rectangle corridor.")
 
     except KeyboardInterrupt:
         print("\n[INFO] Stopped by user (Ctrl+C).")
